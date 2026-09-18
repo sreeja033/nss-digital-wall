@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="gradBg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#C1502E" />
+      <stop offset="65%" stop-color="#A03818" />
+      <stop offset="100%" stop-color="#70220B" />
+    </radialGradient>
+    <radialGradient id="gradNavy" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#192A4A" />
+      <stop offset="100%" stop-color="#0E1B33" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Base background (cream) -->
+  <rect width="512" height="512" rx="100" fill="#FAF6ED" />
+
+  <!-- Outer Navy Circle -->
+  <circle cx="256" cy="256" r="236" fill="url(#gradNavy)" filter="url(#shadow)" />
+  <circle cx="256" cy="256" r="236" fill="none" stroke="#FAF6ED" stroke-width="6" />
+
+  <!-- Inner Red / Terracotta Band -->
+  <circle cx="256" cy="256" r="195" fill="url(#gradBg)" stroke="#FAF6ED" stroke-width="4" />
+
+  <!-- Inner Navy Wheel Chamber -->
+  <circle cx="256" cy="256" r="148" fill="#0E1B33" stroke="#FAF6ED" stroke-width="4" />
+
+  <!-- The Konark Wheel 8 Main Spokes & 8 Minor Spokes -->
+  <!-- 8 Main Spokes -->
+  <g stroke="#FAF6ED" stroke-width="8" stroke-linecap="round">
+    <line x1="256" y1="108" x2="256" y2="404" />
+    <line x1="108" y1="256" x2="404" y2="256" />
+    <line x1="151" y1="151" x2="361" y2="361" />
+    <line x1="361" y1="151" x2="151" y2="361" />
+  </g>
+
+  <!-- 8 Minor Spokes -->
+  <g stroke="#E8A93A" stroke-width="4" stroke-linecap="round" opacity="0.9">
+    <line x1="256" y1="116" x2="256" y2="396" transform="rotate(22.5 256 256)" />
+    <line x1="256" y1="116" x2="256" y2="396" transform="rotate(67.5 256 256)" />
+    <line x1="256" y1="116" x2="256" y2="396" transform="rotate(112.5 256 256)" />
+    <line x1="256" y1="116" x2="256" y2="396" transform="rotate(157.5 256 256)" />
+  </g>
+
+  <!-- Konark Wheel Center Hub -->
+  <circle cx="256" cy="256" r="44" fill="url(#gradBg)" stroke="#FAF6ED" stroke-width="6" />
+  <circle cx="256" cy="256" r="22" fill="#FAF6ED" />
+  <circle cx="256" cy="256" r="12" fill="#0E1B33" />
+
+  <!-- Small studs on the wheel rim -->
+  <g fill="#FAF6ED">
+    <circle cx="256" cy="116" r="6" />
+    <circle cx="256" cy="396" r="6" />
+    <circle cx="116" cy="256" r="6" />
+    <circle cx="396" cy="256" r="6" />
+    <circle cx="157" cy="157" r="6" />
+    <circle cx="355" cy="355" r="6" />
+    <circle cx="355" cy="157" r="6" />
+    <circle cx="157" cy="355" r="6" />
+  </g>
+
+  <!-- Circular Text Paths in Outer Navy Ring -->
+  <path id="textArcTop" d="M 50,256 A 206,206 0 0,1 462,256" fill="none" />
+  <path id="textArcBottom" d="M 462,256 A 206,206 0 0,1 50,256" fill="none" />
+
+  <text fill="#FAF6ED" font-family="'Epilogue', Arial, sans-serif" font-weight="900" font-size="24" letter-spacing="4">
+    <textPath href="#textArcTop" startOffset="50%" text-anchor="middle">
+      NATIONAL SERVICE SCHEME
+    </textPath>
+  </text>
+
+  <text fill="#FAF6ED" font-family="'Epilogue', Arial, sans-serif" font-weight="800" font-size="22" letter-spacing="5">
+    <textPath href="#textArcBottom" startOffset="50%" text-anchor="middle">
+      NOT ME BUT YOU
+    </textPath>
+  </text>
+</svg>

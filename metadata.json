@@ -1,0 +1,11 @@
+{
+  "name": "Remix Remix Remix Remix NSS Community Corkboard",
+  "description": "A collaborative platform for reporting and resolving local issues through community-driven action and transparent visual tracking.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

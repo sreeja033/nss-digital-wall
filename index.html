@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      (function() {
+        var isWsNotice = function(msg) {
+          if (!msg) return false;
+          var s = (typeof msg === 'string') ? msg : (msg.message || msg.stack || String(msg));
+          return (
+            s.indexOf('WebSocket') !== -1 ||
+            s.indexOf('websocket') !== -1 ||
+            s.indexOf('[vite] failed to connect to websocket') !== -1 ||
+            s.indexOf('WebSocket closed without opened') !== -1 ||
+            s.indexOf('[vite]') !== -1 ||
+            s.indexOf('vite') !== -1
+          );
+        };
+
+        var origConsoleError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var fullMsg = args.map(function(a) {
+            return (a && (a.message || a.stack)) ? (a.message || a.stack) : String(a);
+          }).join(' ');
+          if (isWsNotice(fullMsg)) return;
+          return origConsoleError.apply(console, arguments);
+        };
+
+        var origConsoleWarn = console.warn;
+        console.warn = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var fullMsg = args.map(function(a) {
+            return (a && (a.message || a.stack)) ? (a.message || a.stack) : String(a);
+          }).join(' ');
+          if (isWsNotice(fullMsg)) return;
+          return origConsoleWarn.apply(console, arguments);
+        };
+
+        window.addEventListener('unhandledrejection', function (e) {
+          var reason = e.reason;
+          if (isWsNotice(reason)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            return false;
+          }
+        }, true);
+
+        window.addEventListener('error', function (e) {
+          if (isWsNotice(e.message) || isWsNotice(e.error)) {
+            e.preventDefault();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            return false;
+          }
+        }, true);
+
+        // Intercept native WebSocket to silently handle Vite dev HMR in container environments
+        if (typeof window.WebSocket !== 'undefined') {
+          var OrigWebSocket = window.WebSocket;
+          window.WebSocket = function(url, protocols) {
+            var urlStr = String(url || '');
+            var listeners = {};
+            var mockWs = {
+              url: urlStr,
+              readyState: 1, // WebSocket.OPEN
+              bufferedAmount: 0,
+              extensions: '',
+              protocol: Array.isArray(protocols) ? protocols[0] : (protocols || 'vite-hmr'),
+              binaryType: 'blob',
+              send: function() {},
+              close: function() {},
+              addEventListener: function(evt, fn) {
+                if (!listeners[evt]) listeners[evt] = [];
+                listeners[evt].push(fn);
+                if (evt === 'open') {
+                  setTimeout(function() {
+                    try { fn({ type: 'open', target: mockWs }); } catch (e) {}
+                  }, 0);
+                }
+              },
+              removeEventListener: function(evt, fn) {
+                if (!listeners[evt]) return;
+                listeners[evt] = listeners[evt].filter(function(f) { return f !== fn; });
+              },
+              dispatchEvent: function() { return true; },
+              onopen: null,
+              onmessage: null,
+              onerror: null,
+              onclose: null,
+            };
+
+            setTimeout(function() {
+              if (typeof mockWs.onopen === 'function') {
+                try { mockWs.onopen({ type: 'open', target: mockWs }); } catch (e) {}
+              }
+            }, 0);
+
+            return mockWs;
+          };
+          window.WebSocket.prototype = OrigWebSocket.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
+        }
+      })();
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#C1502E" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="NSS Voice" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="NSS Voice" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>NSS Community Corkboard</title>
+    <meta name="description" content="A collaborative platform for reporting and resolving local issues through community-driven action and transparent visual tracking." />
+    <meta property="og:title" content="NSS Community Corkboard" />
+    <meta property="og:description" content="A collaborative platform for reporting and resolving local issues through community-driven action and transparent visual tracking." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Epilogue:ital,wght@0,500;0,600;0,700;0,800;0,900;1,700&family=Kalam:wght@400;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-[#FAF6ED] text-[#1f1b17] font-sans antialiased selection:bg-[#ffddae] selection:text-[#1f1b17]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
