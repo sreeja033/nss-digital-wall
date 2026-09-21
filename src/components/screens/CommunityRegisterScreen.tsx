@@ -296,26 +296,6 @@ export const CommunityRegisterScreen: React.FC = () => {
                 required
               />
             </div>
-            {/* Quick-tap suggestions */}
-            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-              <span className="text-[10px] text-[#7C695E] font-medium">Quick suggestions:</span>
-              {['CMRIT Campus', 'Ward 4 - Gandhi Nagar', 'Sector 7 Colony', 'Shivaji Nagar', 'Medchal Road', 'Rail Vihar'].map(
-                (sug) => (
-                  <button
-                    key={sug}
-                    type="button"
-                    onClick={() => setLocation(sug)}
-                    className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors cursor-pointer ${
-                      location === sug
-                        ? 'bg-[#A03818] text-white border-[#A03818] font-bold'
-                        : 'bg-[#FAF6ED] text-[#57423C] border-[#DEC0B8] hover:bg-[#FFDBD1]/50'
-                    }`}
-                  >
-                    {sug}
-                  </button>
-                )
-              )}
-            </div>
           </div>
 
           <div>

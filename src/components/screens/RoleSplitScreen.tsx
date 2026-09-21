@@ -165,29 +165,11 @@ export const RoleSplitScreen: React.FC = () => {
               </div>
             </div>
 
-            {/* Volunteer Count Pill */}
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#B8EADE]/70 border border-[#38665E]/30 text-[#1B4B43] shrink-0 shadow-2xs">
-              <Users className="w-3 h-3 text-[#1B4B43]" />
-              <span className="font-['Epilogue'] font-black text-xs">{volunteerCount}</span>
-              <span className="text-[10px] font-bold text-[#38665E] uppercase tracking-wider">
-                {volunteerCount === 1 ? 'Cadet' : 'Cadets'}
-              </span>
-            </div>
+            
           </div>
 
           {/* Volunteer Count Highlight Strip Under Header */}
-          <div className="mb-2 py-1.5 px-3 rounded-lg bg-[#E6F7F3] border border-[#B8EADE] flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2 text-[#1B4B43] font-['Epilogue'] font-bold">
-              <Users className="w-3.5 h-3.5 text-[#1B4B43]" />
-              <span>
-                {volunteerCount} {volunteerCount === 1 ? 'Volunteer' : 'Volunteers'} Enrolled
-              </span>
-            </div>
-            <span className="text-[10px] font-bold text-[#38665E] uppercase tracking-wider">
-              Ready for Action
-            </span>
-          </div>
-
+         
           <p className="text-xs text-[#57423C] leading-snug mb-2">
             Complete officer-assigned tasks, clean up local spots, post photo proof, and log hours.
           </p>
