@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Pushpin } from '../common/Pushpin';
 import { RubberStamp } from '../common/RubberStamp';
@@ -6,7 +6,6 @@ import { WashiTape } from '../common/WashiTape';
 import {
   CheckCircle2,
   Camera,
-  Upload,
   ShieldCheck,
   AlertTriangle,
   Send,
@@ -15,6 +14,8 @@ import {
   Sparkles,
   Award,
   ArrowRight,
+  RotateCw,
+  X,
 } from 'lucide-react';
 
 export const ActionTrackerScreen: React.FC = () => {
@@ -46,24 +47,97 @@ export const ActionTrackerScreen: React.FC = () => {
 
   const [customBeforePhotoUrl, setCustomBeforePhotoUrl] = useState('');
   const [solvePhotoUrl, setSolvePhotoUrl] = useState('');
-  const [showAfterUrlInput, setShowAfterUrlInput] = useState(false);
-  const [showBeforeUrlInput, setShowBeforeUrlInput] = useState(false);
   const [impactMetrics, setImpactMetrics] = useState('');
   const [resolveError, setResolveError] = useState<string | null>(null);
 
-  // Demo photos for quick field logging
-  const demoFieldPhotos = [
-    {
-      label: 'Cones & Warning Tape (Before/Interim)',
-      url: 'https://lh3.googleusercontent.com/aida-public/AB6AXuBNGVt-Gg5lV45t6cNNHyzGusRd0LDWDT-0CEFYf6nQM31t3_nLQb7nBoucN0Za8uu7icl-1I1jwHZGbOMVqJXiBEqQUOWpmfxkFbz1ykoqSDEiOdZNz2f63RONtTte-oVqr-bxWXor7rwUpUhlnur4IF4Z2sjsoG-1YKxqJzAwUV4VgwWJ6JGjSOMd39IlveCtXzm_t9BF2Ylv4kTAT9ji6H3U3DoBGpO1J8SnvNb_NWdCmCo1s0tM6g',
-    },
-    {
-      label: 'Cleared Alley / Fixed (After)',
-      url: 'https://lh3.googleusercontent.com/aida-public/AB6AXuBdPt6ktGSv5L8mO7Ik4PYP8nNgUP9uk9zPO-skOiVGyvH9E9dFwTbzVhOLghA9wROEA51dU6ZincrQVU8X99wlbnn5HyGpUMAResuxBBEOaefwV7m4RmX4rmmPl3tHrgUx9UQKRjzTcRMazHjK_xOTq9x0AyDc0Zee0sEa0vMmsohW2jRkemtgAjWFqKCtBSCTsW8f1ODKdqcshLl9SCRioZYTuszTc4UURz94MoRhr9s3SDjT7VeVHg',
-    },
-  ];
+  // Camera state & refs
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraTarget, setCameraTarget] = useState<'progress' | 'before' | 'after'>('progress');
+  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, target: 'progress' | 'before' | 'after') => {
+  const progressCameraInputRef = useRef<HTMLInputElement>(null);
+  const beforeCameraInputRef = useRef<HTMLInputElement>(null);
+  const afterCameraInputRef = useRef<HTMLInputElement>(null);
+
+  // Stop camera tracks cleanly
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    setIsCameraOpen(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  const startCamera = async (
+    target: 'progress' | 'before' | 'after',
+    facing: 'environment' | 'user' = 'environment'
+  ) => {
+    setCameraTarget(target);
+    setCameraFacing(facing);
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+        }
+        setIsCameraOpen(true);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: facing },
+          audio: false,
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+        return;
+      } catch (err) {
+        console.warn('Live viewfinder unavailable, triggering device camera:', err);
+        stopCamera();
+      }
+    }
+
+    // Trigger native OS camera capture directly
+    if (target === 'progress') progressCameraInputRef.current?.click();
+    if (target === 'before') beforeCameraInputRef.current?.click();
+    if (target === 'after') afterCameraInputRef.current?.click();
+  };
+
+  const capturePhoto = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      if (cameraTarget === 'progress') setLogPhotoUrl(dataUrl);
+      if (cameraTarget === 'before') setCustomBeforePhotoUrl(dataUrl);
+      if (cameraTarget === 'after') setSolvePhotoUrl(dataUrl);
+      stopCamera();
+    }
+  };
+
+  const flipCamera = () => {
+    const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+    setCameraFacing(nextFacing);
+    startCamera(cameraTarget, nextFacing);
+  };
+
+  const handleNativeCameraCapture = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    target: 'progress' | 'before' | 'after'
+  ) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -75,6 +149,7 @@ export const ActionTrackerScreen: React.FC = () => {
       };
       reader.readAsDataURL(file);
     }
+    e.target.value = '';
   };
 
   const effectiveBeforePhoto =
@@ -116,7 +191,7 @@ export const ActionTrackerScreen: React.FC = () => {
 
   if (!activeProblem) {
     return (
-      <div className="pb-24 px-4 pt-3 max-w-xl mx-auto space-y-4">
+      <div className="pb-24 px-3 sm:px-4 pt-3 max-w-xl mx-auto space-y-4 w-full">
         <div className="flex items-center justify-between pt-1">
           <div>
             <div className="flex items-center gap-2">
@@ -150,11 +225,34 @@ export const ActionTrackerScreen: React.FC = () => {
     );
   }
 
-  const hasLoggedPhoto =
-    activeProblem.updates.some((u) => Boolean(u.photoUrl)) || Boolean(solvePhotoUrl);
-
   return (
-    <div className="pb-24 px-4 pt-3 max-w-xl mx-auto space-y-4">
+    <div className="pb-24 px-3 sm:px-4 pt-3 max-w-xl mx-auto space-y-4 w-full">
+      {/* Hidden Native Camera Inputs (accept="image/*" capture="environment") */}
+      <input
+        ref={progressCameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => handleNativeCameraCapture(e, 'progress')}
+        className="hidden"
+      />
+      <input
+        ref={beforeCameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => handleNativeCameraCapture(e, 'before')}
+        className="hidden"
+      />
+      <input
+        ref={afterCameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => handleNativeCameraCapture(e, 'after')}
+        className="hidden"
+      />
+
       {/* Header */}
       <div className="flex items-center justify-between pt-1">
         <div>
@@ -165,7 +263,7 @@ export const ActionTrackerScreen: React.FC = () => {
             </h1>
           </div>
           <p className="text-xs text-[#6E5A4E]">
-            Add updates, post photos, and mark issues solved.
+            Capture field photos, post progress updates, and mark issues solved.
           </p>
         </div>
       </div>
@@ -251,7 +349,55 @@ export const ActionTrackerScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* Step 1: Log Verified Field Update */}
+      {/* Progress Log Timeline */}
+      <div className="bg-[#FFFDF8] border-2 border-[#DEC0B8] rounded-xl p-4 shadow-xs space-y-3">
+        <div className="flex items-center justify-between border-b border-[#F1E6E0] pb-2">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-[#7C695E]" />
+            <h3 className="font-['Epilogue'] font-bold text-sm text-[#1F1B17]">
+              Field Progress Activity ({activeProblem.updates.length})
+            </h3>
+          </div>
+          <span className="text-[11px] font-mono text-[#7C695E]">Verified Log</span>
+        </div>
+
+        {activeProblem.updates.length === 0 ? (
+          <p className="text-xs text-[#6E5A4E] italic py-2 text-center">
+            No updates recorded yet. Capture a photo and post field progress below!
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {activeProblem.updates.map((update) => (
+              <div
+                key={update.id}
+                className="p-3 rounded-lg bg-[#FAF6ED] border border-[#DEC0B8] space-y-1.5"
+              >
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-['Epilogue'] font-bold text-[#1B4B43] bg-[#B8EADE] px-2 py-0.5 rounded">
+                    {update.tag || 'UPDATE'}
+                  </span>
+                  <span className="text-[#7C695E] font-mono">{update.timestamp}</span>
+                </div>
+                <p className="text-xs text-[#1F1B17]">{update.description}</p>
+                {update.photoUrl && (
+                  <div className="w-full max-w-xs h-32 rounded-lg overflow-hidden border border-[#DEC0B8] mt-1.5">
+                    <img
+                      src={update.photoUrl}
+                      alt="Update"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
+                <div className="text-[10px] text-[#7C695E] pt-1">
+                  Logged by: <strong>{update.author}</strong> ({update.role})
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Step 1: Log Verified Field Update - CAMERA ONLY */}
       <div className="bg-[#FFFDF8] border-2 border-[#DEC0B8] rounded-xl p-4 shadow-xs space-y-3">
         <div className="flex items-center gap-2 border-b border-[#F1E6E0] pb-2">
           <Camera className="w-4 h-4 text-[#A03818]" />
@@ -275,13 +421,13 @@ export const ActionTrackerScreen: React.FC = () => {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div>
               <label className="block font-semibold text-[#57423C] mb-1">Type of Update</label>
               <select
                 value={logTag || 'FIELD ACTION'}
                 onChange={(e) => setLogTag(e.target.value)}
-                className="w-full px-2 py-1.5 rounded-lg bg-[#FAF6ED] border border-[#DEC0B8] text-xs"
+                className="w-full px-2.5 py-2 rounded-lg bg-[#FAF6ED] border border-[#DEC0B8] text-xs"
               >
                 <option value="FIELD ACTION">Field Action</option>
                 <option value="SAFETY PERIMETER">Safety Warning</option>
@@ -292,45 +438,53 @@ export const ActionTrackerScreen: React.FC = () => {
 
             <div>
               <label className="block font-semibold text-[#57423C] mb-1">
-                Attach Field Photo
+                Field Photo Evidence
               </label>
-              <div className="flex gap-1.5">
-                <label className="flex-1 py-1.5 px-2 rounded-lg bg-[#FAF6ED] border border-[#DEC0B8] text-[11px] font-bold text-[#38665E] hover:border-[#38665E] text-center cursor-pointer flex items-center justify-center gap-1">
-                  <Upload className="w-3 h-3" />
-                  <span>{logPhotoUrl ? 'Photo Selected' : 'Upload File'}</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handleFileUpload(e, 'progress')}
-                    className="hidden"
-                  />
-                </label>
+              {logPhotoUrl ? (
+                <div className="p-2 rounded-xl bg-[#FAF6ED] border border-[#B8EADE] flex items-center gap-2.5">
+                  <div className="w-12 h-12 rounded-lg overflow-hidden border border-[#B8EADE] shrink-0 bg-black/5">
+                    <img src={logPhotoUrl} alt="Captured update" className="w-full h-full object-cover" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[10px] font-bold text-[#1B4B43] flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Photo captured
+                    </span>
+                    <div className="flex items-center gap-2 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => startCamera('progress')}
+                        className="text-[11px] text-[#1B4B43] font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <span>Retake</span>
+                      </button>
+                      <span className="text-[#DEC0B8]">•</span>
+                      <button
+                        type="button"
+                        onClick={() => setLogPhotoUrl('')}
+                        className="text-[11px] text-[#A03818] hover:underline cursor-pointer"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => setLogPhotoUrl(demoFieldPhotos[0].url)}
-                  className="py-1.5 px-2 rounded-lg bg-[#FAF6ED] border border-[#DEC0B8] text-[10.5px] font-bold text-[#57423C] hover:text-[#1F1B17] text-center cursor-pointer shrink-0"
+                  onClick={() => startCamera('progress')}
+                  className="touch-target min-h-[42px] w-full py-2 px-3 rounded-xl bg-[#FAF6ED] border-2 border-dashed border-[#DEC0B8] hover:border-[#1B4B43] text-xs font-['Epilogue'] font-bold text-[#1B4B43] flex items-center justify-center gap-2 cursor-pointer transition-all hover:bg-[#FAF6ED]/70"
                 >
-                  Demo Photo
+                  <Camera className="w-4 h-4 text-[#1B4B43]" />
+                  <span>Capture Photo</span>
                 </button>
-              </div>
-              {logPhotoUrl && (
-                <div className="mt-1 flex items-center gap-2 text-[10px] text-[#38665E]">
-                  <span>✓ Photo attached</span>
-                  <button
-                    type="button"
-                    onClick={() => setLogPhotoUrl('')}
-                    className="text-[#A03818] hover:underline cursor-pointer"
-                  >
-                    Remove
-                  </button>
-                </div>
               )}
             </div>
           </div>
 
           <button
             type="submit"
-            className="w-full py-2 px-3 rounded-lg font-['Epilogue'] font-bold text-xs cork-btn-teal flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+            className="touch-target min-h-[44px] w-full py-2.5 px-3 rounded-xl font-['Epilogue'] font-bold text-xs cork-btn-teal flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
           >
             <Send className="w-3.5 h-3.5" />
             <span>Post Update</span>
@@ -338,7 +492,7 @@ export const ActionTrackerScreen: React.FC = () => {
         </form>
       </div>
 
-      {/* Step 2: Final Resolution & Mark as SOLVED */}
+      {/* Step 2: Final Resolution & Mark as SOLVED - CAMERA ONLY */}
       <div className="bg-[#FFFDF8] border-2 border-[#B8EADE] rounded-xl p-4 shadow-xs space-y-3">
         <div className="flex items-center gap-2 border-b border-[#B8EADE] pb-2">
           <CheckCircle2 className="w-4 h-4 text-[#1B4B43]" />
@@ -360,16 +514,16 @@ export const ActionTrackerScreen: React.FC = () => {
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
             {/* 1. Before Photo */}
-            <div className="p-3 rounded-lg bg-[#FAF6ED] border border-[#DEC0B8] space-y-2 text-center">
+            <div className="p-3.5 rounded-xl bg-[#FAF6ED] border border-[#DEC0B8] space-y-2.5 text-center">
               <span className="text-[10px] font-mono font-bold uppercase text-[#7C695E] block">
                 1. Before Photo (Initial Hazard)
               </span>
               {effectiveBeforePhoto ? (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <span className="text-[#1B4B43] font-bold bg-[#B8EADE] text-[10px] px-2 py-0.5 rounded-full inline-block">
                     ✓ Verified Before Proof
                   </span>
-                  <div className="w-full h-24 mx-auto rounded overflow-hidden border border-[#DEC0B8]">
+                  <div className="w-full h-28 mx-auto rounded-lg overflow-hidden border border-[#DEC0B8] bg-black/5">
                     <img
                       src={effectiveBeforePhoto}
                       alt="Before"
@@ -377,21 +531,13 @@ export const ActionTrackerScreen: React.FC = () => {
                     />
                   </div>
                   <div className="flex items-center justify-center gap-2 pt-0.5">
-                    <label className="text-[10px] text-[#A03818] font-bold underline cursor-pointer">
-                      Replace Photo
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleFileUpload(e, 'before')}
-                        className="hidden"
-                      />
-                    </label>
                     <button
                       type="button"
-                      onClick={() => setShowBeforeUrlInput(!showBeforeUrlInput)}
-                      className="text-[10px] text-[#7C695E] hover:underline cursor-pointer"
+                      onClick={() => startCamera('before')}
+                      className="touch-target min-h-[36px] px-2.5 py-1 rounded-lg bg-white border border-[#DEC0B8] text-[11px] text-[#A03818] font-bold hover:bg-[#FFF5F2] cursor-pointer flex items-center gap-1"
                     >
-                      URL
+                      <Camera className="w-3 h-3" />
+                      <span>Retake Before Photo</span>
                     </button>
                   </div>
                 </div>
@@ -400,61 +546,32 @@ export const ActionTrackerScreen: React.FC = () => {
                   <span className="text-[#A03818] font-bold bg-[#FFDBD1] text-[10px] px-2 py-0.5 rounded-full inline-block">
                     Missing Before Photo
                   </span>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="w-full py-1.5 px-2 rounded-lg bg-white border border-[#DEC0B8] text-[11px] font-bold text-[#A03818] hover:bg-[#FFF5F2] cursor-pointer flex items-center justify-center gap-1">
-                      <Upload className="w-3 h-3" />
-                      <span>Upload Before Photo</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleFileUpload(e, 'before')}
-                        className="hidden"
-                      />
-                    </label>
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setCustomBeforePhotoUrl(demoFieldPhotos[0].url)}
-                        className="text-[10px] text-[#57423C] font-semibold underline cursor-pointer"
-                      >
-                        + Use Demo Photo
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowBeforeUrlInput(!showBeforeUrlInput)}
-                        className="text-[10px] text-[#57423C] font-semibold underline cursor-pointer"
-                      >
-                        + Paste URL
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {showBeforeUrlInput && (
-                <div className="pt-1">
-                  <input
-                    type="url"
-                    placeholder="Paste image URL here..."
-                    value={customBeforePhotoUrl}
-                    onChange={(e) => setCustomBeforePhotoUrl(e.target.value)}
-                    className="w-full px-2 py-1 text-[11px] bg-white border border-[#DEC0B8] rounded"
-                  />
+                  <p className="text-[11px] text-[#6E5A4E]">
+                    A photo of the initial problem is required to verify resolution.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => startCamera('before')}
+                    className="touch-target min-h-[42px] w-full py-2 px-3 rounded-xl bg-white border-2 border-dashed border-[#DEC0B8] hover:border-[#A03818] text-xs font-['Epilogue'] font-bold text-[#A03818] flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs hover:bg-[#FFF8F5] transition-all"
+                  >
+                    <Camera className="w-4 h-4 text-[#A03818]" />
+                    <span>Capture Before Photo</span>
+                  </button>
                 </div>
               )}
             </div>
 
             {/* 2. After Photo */}
-            <div className="p-3 rounded-lg bg-[#FAF6ED] border border-[#B8EADE] space-y-2 text-center">
+            <div className="p-3.5 rounded-xl bg-[#FAF6ED] border border-[#B8EADE] space-y-2.5 text-center">
               <span className="text-[10px] font-mono font-bold uppercase text-[#7C695E] block">
                 2. After Photo (Solved Remediation)
               </span>
               {solvePhotoUrl ? (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <span className="text-[#1B4B43] font-bold bg-[#B8EADE] text-[10px] px-2 py-0.5 rounded-full inline-block">
                     ✓ Verified Solved Proof
                   </span>
-                  <div className="w-full h-24 mx-auto rounded overflow-hidden border border-[#B8EADE]">
+                  <div className="w-full h-28 mx-auto rounded-lg overflow-hidden border border-[#B8EADE] bg-black/5">
                     <img
                       src={solvePhotoUrl}
                       alt="After"
@@ -462,26 +579,18 @@ export const ActionTrackerScreen: React.FC = () => {
                     />
                   </div>
                   <div className="flex items-center justify-center gap-2 pt-0.5">
-                    <label className="text-[10px] text-[#1B4B43] font-bold underline cursor-pointer">
-                      Replace Photo
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleFileUpload(e, 'after')}
-                        className="hidden"
-                      />
-                    </label>
                     <button
                       type="button"
-                      onClick={() => setShowAfterUrlInput(!showAfterUrlInput)}
-                      className="text-[10px] text-[#7C695E] hover:underline cursor-pointer"
+                      onClick={() => startCamera('after')}
+                      className="touch-target min-h-[36px] px-2.5 py-1 rounded-lg bg-white border border-[#B8EADE] text-[11px] text-[#1B4B43] font-bold hover:bg-[#E8F8F4] cursor-pointer flex items-center gap-1"
                     >
-                      URL
+                      <Camera className="w-3 h-3" />
+                      <span>Retake Solved Photo</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setSolvePhotoUrl('')}
-                      className="text-[10px] text-[#A03818] hover:underline cursor-pointer"
+                      className="text-[11px] text-[#A03818] hover:underline cursor-pointer"
                     >
                       Clear
                     </button>
@@ -492,46 +601,17 @@ export const ActionTrackerScreen: React.FC = () => {
                   <span className="text-[#A03818] font-bold bg-[#FFDBD1] text-[10px] px-2 py-0.5 rounded-full inline-block">
                     Missing After Photo Proof
                   </span>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="w-full py-1.5 px-2 rounded-lg bg-white border border-[#B8EADE] text-[11px] font-bold text-[#1B4B43] hover:bg-[#B8EADE]/30 cursor-pointer flex items-center justify-center gap-1 shadow-2xs">
-                      <Upload className="w-3 h-3" />
-                      <span>Upload Solved Photo Proof</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleFileUpload(e, 'after')}
-                        className="hidden"
-                      />
-                    </label>
-                    <div className="flex items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setSolvePhotoUrl(demoFieldPhotos[1].url)}
-                        className="text-[10px] text-[#1B4B43] font-semibold underline cursor-pointer"
-                      >
-                        + Use Demo After Photo
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowAfterUrlInput(!showAfterUrlInput)}
-                        className="text-[10px] text-[#57423C] font-semibold underline cursor-pointer"
-                      >
-                        + Paste URL
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {showAfterUrlInput && (
-                <div className="pt-1">
-                  <input
-                    type="url"
-                    placeholder="Paste image URL here..."
-                    value={solvePhotoUrl}
-                    onChange={(e) => setSolvePhotoUrl(e.target.value)}
-                    className="w-full px-2 py-1 text-[11px] bg-white border border-[#B8EADE] rounded"
-                  />
+                  <p className="text-[11px] text-[#6E5A4E]">
+                    Capture clear photo proof showing the fixed condition.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => startCamera('after')}
+                    className="touch-target min-h-[42px] w-full py-2 px-3 rounded-xl bg-white border-2 border-dashed border-[#B8EADE] hover:border-[#1B4B43] text-xs font-['Epilogue'] font-bold text-[#1B4B43] flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs hover:bg-[#F0FAF7] transition-all"
+                  >
+                    <Camera className="w-4 h-4 text-[#1B4B43]" />
+                    <span>Capture Solved Photo Proof</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -555,13 +635,91 @@ export const ActionTrackerScreen: React.FC = () => {
 
           <button
             type="submit"
-            className="w-full py-2.5 px-4 rounded-xl font-['Epilogue'] font-extrabold text-xs cork-btn-teal flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+            className="touch-target min-h-[46px] w-full py-2.5 px-4 rounded-xl font-['Epilogue'] font-extrabold text-xs cork-btn-teal flex items-center justify-center gap-2 shadow-sm cursor-pointer"
           >
             <Award className="w-4 h-4" />
             <span>Mark as Solved & Publish to Impact Gallery</span>
           </button>
         </form>
       </div>
+
+      {/* Live Camera Viewfinder Modal */}
+      {isCameraOpen && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-between p-4 pb-safe pt-safe animate-in fade-in duration-200">
+          {/* Top Bar */}
+          <div className="w-full max-w-md flex items-center justify-between text-white py-2">
+            <div className="flex items-center gap-2">
+              <Camera className="w-4 h-4 text-[#B8EADE]" />
+              <span className="font-['Epilogue'] font-bold text-xs uppercase tracking-wider">
+                {cameraTarget === 'progress'
+                  ? 'Capture Progress Photo'
+                  : cameraTarget === 'before'
+                  ? 'Capture Before Photo'
+                  : 'Capture Solved Proof'}
+              </span>
+            </div>
+            <button
+              onClick={stopCamera}
+              className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Video Viewfinder */}
+          <div className="relative w-full max-w-md flex-1 max-h-[65vh] rounded-2xl overflow-hidden bg-black flex items-center justify-center border-2 border-white/20">
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              className="w-full h-full object-cover"
+            />
+
+            {/* Target overlay guide */}
+            <div className="absolute inset-6 border border-white/30 rounded-xl pointer-events-none" />
+          </div>
+
+          {/* Bottom Shutter Controls */}
+          <div className="w-full max-w-md py-4 flex items-center justify-around">
+            {/* Flip Camera */}
+            <button
+              type="button"
+              onClick={flipCamera}
+              className="w-12 h-12 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center cursor-pointer transition-all active:scale-95"
+              title="Flip Camera"
+            >
+              <RotateCw className="w-5 h-5" />
+            </button>
+
+            {/* Shutter Button */}
+            <button
+              type="button"
+              onClick={capturePhoto}
+              className="w-18 h-18 rounded-full bg-white border-4 border-[#1B4B43] flex items-center justify-center shadow-lg active:scale-90 transition-transform cursor-pointer"
+              title="Capture"
+            >
+              <div className="w-14 h-14 rounded-full bg-[#1B4B43] flex items-center justify-center">
+                <Camera className="w-6 h-6 text-white" />
+              </div>
+            </button>
+
+            {/* Direct Native Camera trigger button */}
+            <button
+              type="button"
+              onClick={() => {
+                stopCamera();
+                if (cameraTarget === 'progress') progressCameraInputRef.current?.click();
+                if (cameraTarget === 'before') beforeCameraInputRef.current?.click();
+                if (cameraTarget === 'after') afterCameraInputRef.current?.click();
+              }}
+              className="w-12 h-12 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center cursor-pointer transition-all active:scale-95 text-[11px] font-bold"
+              title="Device Camera"
+            >
+              Device
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

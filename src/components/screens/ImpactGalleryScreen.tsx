@@ -16,19 +16,19 @@ export const ImpactGalleryScreen: React.FC = () => {
   return (
     <div className="flex-1 w-full max-w-xl mx-auto px-4 pt-3 pb-6 space-y-4">
       {/* Header Banner */}
-      <div className="relative bg-[#FFFDF8] border-2 border-[#B8EADE] rounded-2xl p-4 sm:p-5 shadow-[0_4px_14px_rgba(43,38,34,0.07)] -rotate-0.5 mt-4">
+      <div className="relative bg-[#FFFDF8] border-2 border-[#DEC0B8] rounded-2xl p-4 sm:p-5 shadow-[0_4px_14px_rgba(43,38,34,0.07)] -rotate-0.5 mt-4">
         <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 z-10">
-          <Pushpin color="teal" size="lg" />
+          <Pushpin color="rust" size="lg" />
         </div>
         <div className="absolute -top-2.5 left-4 -rotate-6 z-10">
-          <WashiTape color="mint" width="w-16" />
+          <WashiTape color="peach" width="w-16" />
         </div>
         <div className="absolute -top-2.5 right-4 rotate-6 z-10">
           <WashiTape color="yellow" width="w-16" />
         </div>
 
         <div className="text-center pt-3 sm:pt-4">
-          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-[#B8EADE]/70 text-[#1B4B43] text-xs font-['Epilogue'] font-black uppercase tracking-wider mb-1">
+          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-[#FFDBD1] text-[#A03818] border border-[#F5C2A5] text-xs font-['Epilogue'] font-black uppercase tracking-wider mb-1">
             <Trophy className="w-3.5 h-3.5" />
             <span>Solved Issues</span>
           </div>
@@ -41,21 +41,21 @@ export const ImpactGalleryScreen: React.FC = () => {
           </p>
 
           {/* Outcome Ticker */}
-          <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-[#B8EADE]">
+          <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-[#DEC0B8]">
             <div className="bg-[#FAF6ED] p-2 rounded-lg border border-[#DEC0B8]">
-              <div className="font-['Epilogue'] font-black text-base sm:text-lg text-[#1B4B43]">
+              <div className="font-['Epilogue'] font-black text-base sm:text-lg text-[#A03818]">
                 {trashClearedKg} kg
               </div>
               <div className="text-[10px] font-semibold text-[#6E5A4E]">Trash Cleared</div>
             </div>
             <div className="bg-[#FAF6ED] p-2 rounded-lg border border-[#DEC0B8]">
-              <div className="font-['Epilogue'] font-black text-base sm:text-lg text-[#1B4B43]">
+              <div className="font-['Epilogue'] font-black text-base sm:text-lg text-[#A03818]">
                 {treesPlanted}
               </div>
               <div className="text-[10px] font-semibold text-[#6E5A4E]">Trees Planted</div>
             </div>
             <div className="bg-[#FAF6ED] p-2 rounded-lg border border-[#DEC0B8]">
-              <div className="font-['Epilogue'] font-black text-base sm:text-lg text-[#1B4B43]">
+              <div className="font-['Epilogue'] font-black text-base sm:text-lg text-[#A03818]">
                 {solvedProblems.length}
               </div>
               <div className="text-[10px] font-semibold text-[#6E5A4E]">Problems Fixed</div>
@@ -67,8 +67,8 @@ export const ImpactGalleryScreen: React.FC = () => {
       {/* Solved Project Cards */}
       <div className="space-y-4">
         {solvedProblems.length === 0 ? (
-          <div className="bg-[#FFFDF8] border-2 border-dashed border-[#B8EADE] rounded-2xl p-8 text-center space-y-2">
-            <Pushpin color="teal" size="md" />
+          <div className="bg-[#FFFDF8] border-2 border-dashed border-[#DEC0B8] rounded-2xl p-8 text-center space-y-2">
+            <Pushpin color="rust" size="md" />
             <h3 className="font-['Epilogue'] font-black text-base text-[#1F1B17]">
               0 Solved Problems Yet
             </h3>
@@ -77,7 +77,7 @@ export const ImpactGalleryScreen: React.FC = () => {
             </p>
             <button
               onClick={() => navigateTo('problem-wall')}
-              className="mt-2 touch-target min-h-[44px] px-4 py-2 rounded-xl bg-[#1B4B43] text-white text-xs font-['Epilogue'] font-extrabold shadow-xs cursor-pointer"
+              className="mt-2 touch-target min-h-[44px] px-4 py-2 rounded-xl bg-[#A03818] hover:bg-[#842504] text-white text-xs font-['Epilogue'] font-extrabold shadow-xs cursor-pointer transition-all"
             >
               Explore Open Problems
             </button>
@@ -88,23 +88,23 @@ export const ImpactGalleryScreen: React.FC = () => {
             key={item.id}
             onClick={() => navigateTo('problem-detail', item.id)}
             style={{ transform: `rotate(${idx % 2 === 0 ? -0.8 : 0.8}deg)` }}
-            className="relative bg-[#FFFDF8] border-2 border-[#B8EADE] rounded-2xl p-4 sm:p-5 shadow-[0_6px_16px_rgba(43,38,34,0.08)] hover:shadow-lg transition-all cursor-pointer group"
+            className="relative bg-[#FFFDF8] border-2 border-[#DEC0B8] rounded-2xl p-4 sm:p-5 shadow-[0_6px_16px_rgba(43,38,34,0.08)] hover:shadow-lg transition-all cursor-pointer group"
           >
             {/* Top Pushpin */}
             <div className="absolute -top-3 left-8">
-              <Pushpin color="teal" size="md" />
+              <Pushpin color="rust" size="md" />
             </div>
 
             {/* Top Bar: SOLVED Stamp + Outcome Metric */}
             <div className="flex items-center justify-between gap-2 mb-2 pt-1">
               <RubberStamp status="SOLVED" size="sm" />
-              <span className="text-xs font-['Epilogue'] font-black text-[#1B4B43] bg-[#B8EADE]/70 px-2.5 py-0.5 rounded-full border border-[#38665E]/30">
+              <span className="text-xs font-['Epilogue'] font-black text-[#A03818] bg-[#FFDBD1] px-2.5 py-0.5 rounded-full border border-[#F5C2A5]">
                 {item.impactMetrics || 'Fixed'}
               </span>
             </div>
 
             {/* Title & Location */}
-            <h3 className="font-['Epilogue'] font-black text-base sm:text-lg text-[#1F1B17] leading-tight group-hover:text-[#1B4B43] transition-colors">
+            <h3 className="font-['Epilogue'] font-black text-base sm:text-lg text-[#1F1B17] leading-tight group-hover:text-[#A03818] transition-colors">
               {item.title}
             </h3>
 
@@ -130,11 +130,11 @@ export const ImpactGalleryScreen: React.FC = () => {
               </div>
 
               <div className="space-y-1">
-                <div className="flex items-center justify-between text-[10px] font-['Epilogue'] font-bold text-[#1B4B43] uppercase">
+                <div className="flex items-center justify-between text-[10px] font-['Epilogue'] font-bold text-[#A03818] uppercase">
                   <span>After</span>
-                  <span className="text-[9px] font-extrabold text-[#1B4B43]">✓ Fixed</span>
+                  <span className="text-[9px] font-extrabold text-[#A03818]">✓ Fixed</span>
                 </div>
-                <div className="h-28 sm:h-36 rounded-xl overflow-hidden border-2 border-[#B8EADE] shadow-xs bg-[#FAF6ED]">
+                <div className="h-28 sm:h-36 rounded-xl overflow-hidden border-2 border-[#DEC0B8] shadow-xs bg-[#FAF6ED]">
                   <img
                     src={item.solvedPhotoUrl || item.photoUrl}
                     alt="Solved outcome"
@@ -150,7 +150,7 @@ export const ImpactGalleryScreen: React.FC = () => {
 
             {/* Footer details */}
             <div className="mt-3 pt-2.5 border-t border-[#F1E6E0] flex items-center justify-between text-xs text-[#7C695E]">
-              <span className="font-semibold text-[#1B4B43]">
+              <span className="font-semibold text-[#A03818]">
                 Fixed by student volunteers
               </span>
               <div className="flex items-center gap-2">
@@ -165,7 +165,8 @@ export const ImpactGalleryScreen: React.FC = () => {
               </div>
             </div>
           </div>
-        )))}
+        ))
+      )}
       </div>
     </div>
   );
