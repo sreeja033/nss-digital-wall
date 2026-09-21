@@ -6,9 +6,10 @@ import { WashiTape } from '../common/WashiTape';
 import { ArrowRight, ShieldCheck, CheckCircle2, Sparkles, MapPin, Users } from 'lucide-react';
 
 export const WelcomeScreen: React.FC = () => {
-  const { navigateTo, problems } = useApp();
+  const { navigateTo, problems, provisionedVolunteers, volunteerRoster } = useApp();
 
   const solvedCount = problems.filter((p) => p.status === 'SOLVED').length;
+  const volunteerCount = provisionedVolunteers?.length ?? volunteerRoster?.length ?? 0;
 
   return (
     <div className="h-full flex-1 flex flex-col justify-between px-4 py-3 max-w-sm mx-auto">
@@ -117,7 +118,7 @@ export const WelcomeScreen: React.FC = () => {
             <div className="text-[9px] font-semibold text-[#6E5A4E] uppercase tracking-wider">Solved</div>
           </div>
           <div>
-            <div className="font-['Epilogue'] font-black text-sm text-[#7B5300]">1</div>
+            <div className="font-['Epilogue'] font-black text-sm text-[#7B5300]">{volunteerCount}</div>
             <div className="text-[9px] font-semibold text-[#6E5A4E] uppercase tracking-wider">Volunteers</div>
           </div>
           <div>

@@ -25,7 +25,11 @@ export const RoleSplitScreen: React.FC = () => {
     isAdminLoggedIn,
     isCommunityLoggedIn,
     currentCommunityMember,
+    provisionedVolunteers,
+    volunteerRoster,
   } = useApp();
+
+  const volunteerCount = provisionedVolunteers?.length ?? volunteerRoster?.length ?? 0;
 
   const handleChooseVolunteer = () => {
     setUserRole('volunteer');
@@ -120,7 +124,7 @@ export const RoleSplitScreen: React.FC = () => {
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
 
-            {isCommunityLoggedIn ? (
+            {isCommunityLoggedIn && (
               <button
                 onClick={() => {
                   setUserRole('community');
@@ -131,18 +135,6 @@ export const RoleSplitScreen: React.FC = () => {
                 <span>Browse Community Noticeboard</span>
                 <ArrowRight className="w-3 h-3" />
               </button>
-            ) : (
-              <div className="text-center pt-0.5">
-                <button
-                  onClick={() => {
-                    setUserRole('community');
-                    navigateTo('community-login');
-                  }}
-                  className="text-[11px] text-[#7C695E] hover:text-[#1F1B17] underline cursor-pointer"
-                >
-                  Already have an account? Sign In →
-                </button>
-              </div>
             )}
           </div>
         </div>
@@ -158,18 +150,42 @@ export const RoleSplitScreen: React.FC = () => {
             <WashiTape color="mint" width="w-16" />
           </div>
 
-          <div className="flex items-center gap-2.5 mb-2 pt-0.5">
-            <div className="w-9 h-9 rounded-lg bg-[#B8EADE] border border-[#38665E]/40 flex items-center justify-center text-[#1B4B43] shrink-0">
-              <ShieldCheck className="w-5 h-5" />
+          <div className="flex items-center justify-between gap-2 mb-2 pt-0.5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-[#B8EADE] border border-[#38665E]/40 flex items-center justify-center text-[#1B4B43] shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="font-['Epilogue'] font-extrabold text-base text-[#1F1B17] leading-tight">
+                  NSS Volunteer
+                </h2>
+                <span className="text-[10px] font-semibold text-[#1B4B43] uppercase tracking-wider">
+                  Student & community cadets
+                </span>
+              </div>
             </div>
-            <div>
-              <h2 className="font-['Epilogue'] font-extrabold text-base text-[#1F1B17] leading-tight">
-                NSS Volunteer
-              </h2>
-              <span className="text-[10px] font-semibold text-[#1B4B43] uppercase tracking-wider">
-                Student & community cadets
+
+            {/* Volunteer Count Pill */}
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#B8EADE]/70 border border-[#38665E]/30 text-[#1B4B43] shrink-0 shadow-2xs">
+              <Users className="w-3 h-3 text-[#1B4B43]" />
+              <span className="font-['Epilogue'] font-black text-xs">{volunteerCount}</span>
+              <span className="text-[10px] font-bold text-[#38665E] uppercase tracking-wider">
+                {volunteerCount === 1 ? 'Cadet' : 'Cadets'}
               </span>
             </div>
+          </div>
+
+          {/* Volunteer Count Highlight Strip Under Header */}
+          <div className="mb-2 py-1.5 px-3 rounded-lg bg-[#E6F7F3] border border-[#B8EADE] flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 text-[#1B4B43] font-['Epilogue'] font-bold">
+              <Users className="w-3.5 h-3.5 text-[#1B4B43]" />
+              <span>
+                {volunteerCount} {volunteerCount === 1 ? 'Volunteer' : 'Volunteers'} Enrolled
+              </span>
+            </div>
+            <span className="text-[10px] font-bold text-[#38665E] uppercase tracking-wider">
+              Ready for Action
+            </span>
           </div>
 
           <p className="text-xs text-[#57423C] leading-snug mb-2">
