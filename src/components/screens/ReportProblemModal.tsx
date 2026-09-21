@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ProblemCategory } from '../../types';
 import { Pushpin } from '../common/Pushpin';
 import { WashiTape } from '../common/WashiTape';
+import { LocationPickerMap } from '../common/LocationPickerMap';
 import {
   Camera,
   MapPin,
@@ -28,6 +29,7 @@ import {
   RotateCcw,
   AlertCircle,
   Users,
+  Map as MapIcon,
 } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/dateUtils';
 
@@ -50,6 +52,11 @@ export const ReportProblemModal: React.FC = () => {
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [customCategoryText, setCustomCategoryText] = useState('');
   const [location, setLocation] = useState(() => currentCommunityMember?.location || currentCommunityMember?.ward || '');
+  const [detectedCoords, setDetectedCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [showMapPicker, setShowMapPicker] = useState(false);
+  const userHasEditedLocation = useRef(false);
+  const autoGpsTriggered = useRef(false);
+  const lastGeocodeTimeRef = useRef<number>(0);
   const [landmark, setLandmark] = useState('');
   const [urgent, setUrgent] = useState(false);
   const [anonymous, setAnonymous] = useState(true);
@@ -244,45 +251,179 @@ export const ReportProblemModal: React.FC = () => {
     }
   };
 
+  // Reverse geocodes lat/lng into human-readable street & neighborhood details
+  // Enforces Nominatim rate limit: maximum 1 request per second
+  const reverseGeocodeCoords = useCallback(
+    async (lat: number, lng: number) => {
+      // Throttle Nominatim calls to roughly 1 per second per usage policy
+      const now = Date.now();
+      const elapsed = now - lastGeocodeTimeRef.current;
+      if (elapsed < 1050) {
+        await new Promise((res) => setTimeout(res, 1050 - elapsed));
+      }
+      lastGeocodeTimeRef.current = Date.now();
+
+      try {
+        let formatted = '';
+        let road = '';
+        let neighbourhood = '';
+        let city = '';
+
+        // 1. Try server-side endpoint with identified User-Agent and Referer headers
+        try {
+          const srvRes = await fetch(`/api/reverse-geocode?lat=${lat}&lng=${lng}`);
+          if (srvRes.ok) {
+            const srvData = await srvRes.json();
+            formatted = srvData.formatted_address || srvData.display_name;
+            road = srvData.road || '';
+            neighbourhood = srvData.neighbourhood || '';
+            city = srvData.city || '';
+          }
+        } catch {
+          // Fall back to direct Nominatim request
+        }
+
+        // 2. Direct Nominatim OpenStreetMap fallback if server response was not received
+        if (!formatted) {
+          const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&email=24r01a05q2@cmrithyderabad.edu.in`;
+          const directRes = await fetch(nominatimUrl, {
+            headers: {
+              Accept: 'application/json',
+            },
+          });
+          if (directRes.ok) {
+            const data = (await directRes.json()) as any;
+            const addr = data.address || {};
+            road = addr.road || addr.street || addr.pedestrian || addr.footway || addr.path || '';
+            neighbourhood =
+              addr.suburb || addr.neighbourhood || addr.residential || addr.subdivision || addr.village || '';
+            city = addr.city || addr.town || addr.municipality || addr.county || '';
+            const parts = [road, neighbourhood, city].filter(Boolean);
+            formatted =
+              parts.length > 0
+                ? parts.join(', ')
+                : (data.display_name?.split(',').slice(0, 3).join(', ') || `${lat.toFixed(4)}° N, ${lng.toFixed(4)}° E`);
+          }
+        }
+
+        if (formatted) {
+          if (!userHasEditedLocation.current) {
+            setLocation(formatted);
+            setValidationErrors((prev) => ({ ...prev, location: '' }));
+          }
+          if (!landmark && (neighbourhood || road || city)) {
+            setLandmark(neighbourhood || road || city || 'GPS Location');
+            setValidationErrors((prev) => ({ ...prev, landmark: '' }));
+          }
+        }
+      } catch (err) {
+        console.warn('Reverse geocoding error:', err);
+      }
+    },
+    [landmark]
+  );
+
+  const detectLocationAndReverseGeocode = useCallback(
+    (isManual = false) => {
+      setGpsError(null);
+      if (!navigator.geolocation) {
+        if (isManual) {
+          setGpsError('GPS not supported by your browser. Please type your location below.');
+        }
+        return;
+      }
+
+      setIsLocating(true);
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          setIsLocating(false);
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          setDetectedCoords({ lat, lng });
+
+          // Save in localStorage for the map to center on user's location
+          try {
+            localStorage.setItem('nss_user_detected_location', JSON.stringify({ lat, lng }));
+          } catch {}
+
+          // Immediate placeholder with readable coordinates
+          if (!userHasEditedLocation.current && !location) {
+            setLocation(`${lat.toFixed(4)}° N, ${lng.toFixed(4)}° E`);
+          }
+
+          // Trigger throttled reverse-geocoding via Nominatim
+          await reverseGeocodeCoords(lat, lng);
+        },
+        (err) => {
+          setIsLocating(false);
+          console.warn('Geolocation error:', err);
+          if (isManual) {
+            if (err.code === 1) {
+              setGpsError('Location permission denied. Please type your address manually below.');
+            } else if (err.code === 2) {
+              setGpsError('GPS signal unavailable. Please type your address manually below.');
+            } else {
+              setGpsError('Location detection timed out. Please enter your address manually.');
+            }
+          }
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 9000,
+          maximumAge: 15000,
+        }
+      );
+    },
+    [location, reverseGeocodeCoords]
+  );
+
+  // Called when user clicks on the map or drags the pin
+  const handleMapPinChange = useCallback(
+    (coords: { lat: number; lng: number }) => {
+      setDetectedCoords(coords);
+      userHasEditedLocation.current = false;
+      try {
+        localStorage.setItem('nss_user_detected_location', JSON.stringify(coords));
+      } catch {}
+      reverseGeocodeCoords(coords.lat, coords.lng);
+    },
+    [reverseGeocodeCoords]
+  );
+
   const handleDetectGPS = () => {
-    setGpsError(null);
-    if (!navigator.geolocation) {
-      setGpsError('GPS not supported. Please type your location below.');
-      return;
+    detectLocationAndReverseGeocode(true);
+  };
+
+  // Auto-detect GPS location the moment the location section opens
+  useEffect(() => {
+    if (autoGpsTriggered.current) return;
+
+    const el = document.getElementById('field-location');
+    if (!el) {
+      const timer = setTimeout(() => {
+        if (!autoGpsTriggered.current && !location && !detectedCoords) {
+          autoGpsTriggered.current = true;
+          detectLocationAndReverseGeocode(false);
+        }
+      }, 500);
+      return () => clearTimeout(timer);
     }
 
-    setIsLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setIsLocating(false);
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const accuracy = Math.round(pos.coords.accuracy || 15);
-        setLocation(`Near Pinpoint (${lat.toFixed(4)}° N, ${lng.toFixed(4)}° E ±${accuracy}m)`);
-        if (!landmark) {
-          setLandmark('GPS location');
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !autoGpsTriggered.current) {
+          autoGpsTriggered.current = true;
+          if (!location && !detectedCoords) {
+            detectLocationAndReverseGeocode(false);
+          }
         }
       },
-      (err) => {
-        setIsLocating(false);
-        console.warn('Geolocation error:', err);
-        if (err.code === 1) {
-          setGpsError('Location permission denied. Please type your address.');
-        } else if (err.code === 2) {
-          setGpsError('GPS signal lost. Please type your address.');
-        } else if (err.code === 3) {
-          setGpsError('Location timed out. Please type your address.');
-        } else {
-          setGpsError('Could not find location. Please type your address.');
-        }
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 9000,
-        maximumAge: 10000,
-      }
+      { threshold: 0.1 }
     );
-  };
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [detectLocationAndReverseGeocode, location, detectedCoords]);
 
   // Restore draft on mount
   useEffect(() => {
@@ -307,6 +448,7 @@ export const ReportProblemModal: React.FC = () => {
           if (parsed.isCustomCategory !== undefined && parsed.isCustomCategory !== null) setIsCustomCategory(Boolean(parsed.isCustomCategory));
           if (parsed.customCategoryText) setCustomCategoryText(parsed.customCategoryText || '');
           if (parsed.location) setLocation(parsed.location || '');
+          if (parsed.coordinates) setDetectedCoords(parsed.coordinates);
           if (parsed.landmark) setLandmark(parsed.landmark || '');
           if (parsed.urgent !== undefined && parsed.urgent !== null) setUrgent(Boolean(parsed.urgent));
           if (parsed.anonymous !== undefined && parsed.anonymous !== null) setAnonymous(Boolean(parsed.anonymous));
@@ -357,6 +499,7 @@ export const ReportProblemModal: React.FC = () => {
           customCategoryText,
           location,
           landmark,
+          coordinates: detectedCoords,
           urgent,
           anonymous,
           authorName,
@@ -538,6 +681,7 @@ export const ReportProblemModal: React.FC = () => {
         category: effectiveCategory || 'General',
         location: location.trim(),
         landmark: landmark.trim(),
+        coordinates: detectedCoords || undefined,
         urgent,
         anonymous,
         photoUrl,
@@ -1144,29 +1288,70 @@ export const ReportProblemModal: React.FC = () => {
 
           {/* Location & GPS with Graceful Fallback */}
           <div id="field-location" className="scroll-mt-4">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
               <label className="block text-xs font-['Epilogue'] font-bold text-[#1F1B17] uppercase tracking-wider">
                 Location or Address <span className="text-[#A03818]">* (Compulsory)</span>
               </label>
-              <button
-                type="button"
-                onClick={handleDetectGPS}
-                disabled={isLocating}
-                className="touch-target min-h-[44px] text-xs font-['Epilogue'] font-extrabold text-[#A03818] flex items-center gap-1.5 px-2 hover:bg-[#FFDBD1]/30 rounded-lg cursor-pointer transition-colors"
-              >
-                {isLocating ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#A03818]" />
-                    <span>Finding location...</span>
-                  </>
-                ) : (
-                  <>
-                    <MapPin className="w-3.5 h-3.5 text-[#A03818]" />
-                    <span>Use My Location</span>
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleDetectGPS}
+                  disabled={isLocating}
+                  className="touch-target min-h-[44px] text-xs font-['Epilogue'] font-extrabold text-[#A03818] flex items-center gap-1 px-2 hover:bg-[#FFDBD1]/30 rounded-lg cursor-pointer transition-colors"
+                >
+                  {isLocating ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#A03818]" />
+                      <span>Detecting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <MapPin className="w-3.5 h-3.5 text-[#A03818]" />
+                      <span>{detectedCoords ? 'Re-detect GPS' : 'Auto-detect GPS'}</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowMapPicker((prev) => !prev)}
+                  className={`touch-target min-h-[44px] text-xs font-['Epilogue'] font-extrabold flex items-center gap-1 px-2.5 rounded-lg cursor-pointer transition-colors ${
+                    showMapPicker
+                      ? 'bg-[#A03818] text-[#FFFDF8]'
+                      : 'text-[#57423C] hover:bg-[#F1E6E0] border border-[#DEC0B8]'
+                  }`}
+                >
+                  <MapIcon className="w-3.5 h-3.5" />
+                  <span>{showMapPicker ? 'Close Map' : 'Pick on Map'}</span>
+                </button>
+              </div>
             </div>
+
+            {/* GPS Detecting Loading State */}
+            {isLocating && (
+              <div className="mb-2 p-2.5 rounded-xl bg-[#FFDBD1]/60 border border-[#A03818]/30 text-xs text-[#A03818] flex items-center gap-2.5 animate-pulse">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#A03818]" />
+                <div className="flex-1">
+                  <p className="font-bold">Detecting your location...</p>
+                  <p className="text-[11px] text-[#57423C]">
+                    Fetching coordinates and looking up street name via OpenStreetMap Nominatim
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* GPS Coordinates Detected Banner */}
+            {detectedCoords && !isLocating && (
+              <div className="mb-2 p-2 rounded-lg bg-[#B8EADE]/40 border border-[#38665E]/30 text-xs text-[#1B4B43] flex items-center justify-between">
+                <span className="flex items-center gap-1.5 font-medium">
+                  <span className="w-2 h-2 rounded-full bg-[#1B4B43]" />
+                  <span>
+                    GPS Attached: {detectedCoords.lat.toFixed(4)}° N, {detectedCoords.lng.toFixed(4)}° E
+                  </span>
+                </span>
+                <span className="text-[10px] text-[#38665E] italic">Plotted on OpenStreetMap</span>
+              </div>
+            )}
 
             {/* GPS Error Fallback Notice */}
             {gpsError && (
@@ -1185,11 +1370,26 @@ export const ReportProblemModal: React.FC = () => {
               </div>
             )}
 
+            {/* Interactive Leaflet OpenStreetMap Pin Picker */}
+            {showMapPicker && (
+              <div className="mb-2.5 space-y-1">
+                <LocationPickerMap
+                  coordinates={detectedCoords}
+                  onLocationChange={handleMapPinChange}
+                />
+                <p className="text-[11px] text-[#7C695E] flex items-center justify-between px-1">
+                  <span>Click anywhere or drag the pushpin to pinpoint the issue.</span>
+                  <span className="font-mono text-[10px] text-[#8C7A70]">OSM &amp; Nominatim</span>
+                </p>
+              </div>
+            )}
+
             <input
               type="text"
               required
               value={location || ''}
               onChange={(e) => {
+                userHasEditedLocation.current = true;
                 setLocation(e.target.value);
                 if (validationErrors.location) {
                   setValidationErrors((prev) => ({ ...prev, location: '' }));

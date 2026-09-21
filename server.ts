@@ -60,6 +60,94 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// In-memory rate limiting and cache for OpenStreetMap Nominatim reverse geocoding
+let lastNominatimTimestamp = 0;
+const geocodeCache = new Map<string, any>();
+
+app.get('/api/reverse-geocode', async (req, res) => {
+  try {
+    const latStr = String(req.query.lat || '').trim();
+    const lngStr = String(req.query.lng || req.query.lon || '').trim();
+
+    if (!latStr || !lngStr) {
+      return res.status(400).json({ error: 'lat and lng parameters are required.' });
+    }
+
+    const lat = parseFloat(latStr);
+    const lng = parseFloat(lngStr);
+
+    if (isNaN(lat) || isNaN(lng)) {
+      return res.status(400).json({ error: 'Invalid lat or lng coordinate values.' });
+    }
+
+    // Cache key rounded to ~10 meters precision
+    const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+    if (geocodeCache.has(cacheKey)) {
+      return res.json(geocodeCache.get(cacheKey));
+    }
+
+    // Nominatim Usage Policy: Limit requests to roughly 1 per second
+    const now = Date.now();
+    const timeSinceLast = now - lastNominatimTimestamp;
+    if (timeSinceLast < 1050) {
+      await new Promise((resolve) => setTimeout(resolve, 1050 - timeSinceLast));
+    }
+    lastNominatimTimestamp = Date.now();
+
+    const nominatimUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1&email=24r01a05q2@cmrithyderabad.edu.in`;
+
+    const response = await fetch(nominatimUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'NSS-Community-Corkboard/1.0 (contact: 24r01a05q2@cmrithyderabad.edu.in)',
+        'Referer': 'https://ais-pre-77yd6uvgwj24z5hai3dv6q-478376019499.asia-southeast1.run.app',
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: `Nominatim geocoding failed with status ${response.status}`,
+      });
+    }
+
+    const data = (await response.json()) as any;
+    const addr = data.address || {};
+    const road = addr.road || addr.street || addr.pedestrian || addr.footway || addr.path;
+    const neighbourhood =
+      addr.suburb || addr.neighbourhood || addr.residential || addr.subdivision || addr.village;
+    const city = addr.city || addr.town || addr.municipality || addr.county;
+    const parts = [road, neighbourhood, city].filter(Boolean);
+    const formatted =
+      parts.length > 0
+        ? parts.join(', ')
+        : (data.display_name?.split(',').slice(0, 3).join(', ') || `${lat.toFixed(4)}° N, ${lng.toFixed(4)}° E`);
+
+    const result = {
+      display_name: data.display_name || formatted,
+      formatted_address: formatted,
+      road: road || null,
+      neighbourhood: neighbourhood || null,
+      city: city || null,
+      lat,
+      lng,
+      raw: data,
+    };
+
+    geocodeCache.set(cacheKey, result);
+    // Keep cache from growing unbounded
+    if (geocodeCache.size > 200) {
+      const firstKey = geocodeCache.keys().next().value;
+      if (firstKey) geocodeCache.delete(firstKey);
+    }
+
+    return res.json(result);
+  } catch (err: any) {
+    console.warn('Reverse geocoding endpoint error:', err);
+    return res.status(500).json({ error: err.message || 'Geocoding failed' });
+  }
+});
+
 /**
  * Step 3b: Volunteer Login
  * Authenticates using Volunteer ID ONLY.

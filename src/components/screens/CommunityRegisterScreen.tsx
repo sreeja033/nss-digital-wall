@@ -61,11 +61,20 @@ export const CommunityRegisterScreen: React.FC = () => {
               addr.city ||
               `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
             setLocation(formatted);
+            try {
+              localStorage.setItem('nss_user_area_location', JSON.stringify({ lat: latitude, lng: longitude, area: formatted }));
+            } catch {}
           } else {
             setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+            try {
+              localStorage.setItem('nss_user_area_location', JSON.stringify({ lat: latitude, lng: longitude }));
+            } catch {}
           }
         } catch {
           setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+          try {
+            localStorage.setItem('nss_user_area_location', JSON.stringify({ lat: latitude, lng: longitude }));
+          } catch {}
         } finally {
           setIsDetectingLocation(false);
         }

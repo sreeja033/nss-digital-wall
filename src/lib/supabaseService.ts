@@ -231,6 +231,7 @@ export async function createProblemInDb(params: {
   category: ProblemCategory;
   location: string;
   landmark?: string;
+  coordinates?: { lat: number; lng: number };
   urgent: boolean;
   anonymous: boolean;
   photoUrl?: string;
@@ -264,6 +265,8 @@ export async function createProblemInDb(params: {
         category: dbCategory,
         location_text: params.location.trim(),
         landmark: params.landmark?.trim() || null,
+        lat: params.coordinates?.lat ?? null,
+        lng: params.coordinates?.lng ?? null,
         is_urgent: Boolean(params.urgent),
         photo_url: params.photoUrl || null,
         reported_by_user_id: params.anonymous ? null : params.reportedByUserId || null,

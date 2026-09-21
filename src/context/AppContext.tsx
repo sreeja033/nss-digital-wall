@@ -101,6 +101,7 @@ interface AppContextType {
     category: ProblemCategory;
     location: string;
     landmark?: string;
+    coordinates?: { lat: number; lng: number };
     urgent: boolean;
     anonymous: boolean;
     photoUrl?: string;
@@ -1325,6 +1326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     category: ProblemCategory;
     location: string;
     landmark?: string;
+    coordinates?: { lat: number; lng: number };
     urgent: boolean;
     anonymous: boolean;
     photoUrl?: string;
@@ -1337,6 +1339,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         category: report.category,
         location: report.location,
         landmark: report.landmark,
+        coordinates: report.coordinates,
         urgent: report.urgent,
         anonymous: report.anonymous,
         photoUrl: report.photoUrl,
@@ -1453,6 +1456,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isApproved: false,
       location: report.location,
       landmark: report.landmark,
+      coordinates: report.coordinates,
       urgent: report.urgent,
       anonymous: report.anonymous,
       reportedByUserId: report.anonymous ? null : (currentCommunityMember?.id || null),

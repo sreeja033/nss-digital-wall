@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { ProblemCard } from '../common/ProblemCard';
 import { Pushpin } from '../common/Pushpin';
 import { RubberStamp } from '../common/RubberStamp';
+import { InteractiveProblemMap } from '../common/InteractiveProblemMap';
 import {
   Search,
   SlidersHorizontal,
@@ -275,86 +276,30 @@ export const ProblemWallScreen: React.FC = () => {
           )}
         </div>
       ) : (
-        /* MAP VIEW: Hand-illustrated Community Corkboard Map */
+        /* MAP VIEW: Real Interactive Leaflet Map */
         <div className="space-y-3">
-          <div className="relative w-full aspect-4/3 bg-[#E8DFC9] border-2 border-[#C1B296] rounded-2xl overflow-hidden shadow-inner p-3">
-            {/* Map Grid and streets representation */}
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,#d8cdb4_1px,transparent_1px),linear-gradient(to_bottom,#d8cdb4_1px,transparent_1px)] bg-[size:40px_40px] opacity-70" />
-
-            {/* Neighborhood Street Labels */}
-            <div className="absolute top-4 left-6 text-[10px] font-mono font-bold text-[#7C695E] uppercase tracking-wider">
-              North Avenue • Main District
-            </div>
-            <div className="absolute bottom-6 right-8 text-[10px] font-mono font-bold text-[#7C695E] uppercase tracking-wider">
-              Main Bazaar Road
-            </div>
-            <div className="absolute top-1/2 left-8 -rotate-90 text-[10px] font-mono font-bold text-[#7C695E] uppercase tracking-wider">
-              Elm Street
-            </div>
-
-            {/* NSS Volunteer Office Flag */}
-            <div className="absolute top-6 right-6 bg-[#38665E] text-white px-2 py-0.5 rounded text-[10px] font-bold shadow-md flex items-center gap-1 z-10">
-              <span>★</span>
-              <span>NSS Volunteer Office</span>
-            </div>
-
-            {/* Interactive Pins on Map */}
-            {filteredProblems.map((p, idx) => {
-              // Deterministic positions based on idx
-              const positions = [
-                { top: '35%', left: '42%' },
-                { top: '22%', left: '25%' },
-                { top: '65%', left: '70%' },
-                { top: '75%', left: '30%' },
-                { top: '48%', left: '78%' },
-                { top: '82%', left: '60%' },
-                { top: '28%', left: '65%' },
-                { top: '55%', left: '20%' },
-                { top: '40%', left: '50%' },
-              ];
-              const pos = positions[idx % positions.length];
-              const isSelected = selectedMapProblemId === p.id;
-
-              const pinColor =
-                p.status === 'SOLVED'
-                  ? 'teal'
-                  : p.status === 'IN_PROGRESS'
-                  ? 'mustard'
-                  : 'rust';
-
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => setSelectedMapProblemId(p.id)}
-                  style={{ top: pos.top, left: pos.left }}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 group cursor-pointer transition-transform duration-200 z-20 ${
-                    isSelected ? 'scale-125 z-30' : 'hover:scale-110'
-                  }`}
-                >
-                  <Pushpin color={pinColor} size={isSelected ? 'lg' : 'md'} />
-                  {p.urgent && (
-                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-600 rounded-full border border-white animate-ping" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <InteractiveProblemMap
+            problems={filteredProblems}
+            selectedProblemId={selectedMapProblemId}
+            onSelectProblem={setSelectedMapProblemId}
+            onNavigateToDetail={(id) => navigateTo('problem-detail', id)}
+          />
 
           {/* Selected Pin Details Box */}
           {selectedMapProblemId ? (
-            <div>
+            <div className="animate-in fade-in slide-in-from-top-2 duration-150">
               {(() => {
                 const sel = problems.find((p) => p.id === selectedMapProblemId);
                 if (!sel) return null;
                 return (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-xs font-['Epilogue'] font-bold text-[#A03818]">
-                      <span>Selected Problem:</span>
+                      <span>Selected Problem from Map:</span>
                       <button
                         onClick={() => setSelectedMapProblemId(null)}
-                        className="underline text-[#7C695E] cursor-pointer"
+                        className="underline text-[#7C695E] hover:text-[#1F1B17] cursor-pointer"
                       >
-                        Close
+                        Clear Selection
                       </button>
                     </div>
                     <ProblemCard problem={sel} />
@@ -363,8 +308,8 @@ export const ProblemWallScreen: React.FC = () => {
               })()}
             </div>
           ) : (
-            <p className="text-center text-xs text-[#7C695E]">
-              Tap any pin on the map to see details.
+            <p className="text-center text-xs text-[#7C695E] py-1">
+              Tap any pin on the map to see problem details, photo preview, and status.
             </p>
           )}
         </div>
