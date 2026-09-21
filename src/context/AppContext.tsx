@@ -151,29 +151,119 @@ interface AppContextType {
   updateVolunteerProfile: (updatedData: Partial<Volunteer>) => void;
   adminTab: AdminTab;
   setAdminTab: (tab: AdminTab) => void;
+  adminData: AdminData;
+  updateAdminData: (data: Partial<AdminData>) => void;
+}
+
+export interface AdminData {
+  officerId: string;
+  officerName: string;
+  unit: string;
+  email: string;
+  phone: string;
+  broadcastNote: string;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentScreen, setCurrentScreen] = useState<AppScreen>('welcome');
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => {
     try {
-      return sessionStorage.getItem('nss_admin_auth') === 'true';
+      return (
+        localStorage.getItem('nss_admin_auth') === 'true' ||
+        sessionStorage.getItem('nss_admin_auth') === 'true'
+      );
     } catch {
       return false;
     }
   });
+
+  const [isVolunteerLoggedIn, setIsVolunteerLoggedIn] = useState<boolean>(() => {
+    try {
+      return (
+        localStorage.getItem('nss_volunteer_auth') === 'true' ||
+        sessionStorage.getItem('nss_volunteer_auth') === 'true' ||
+        Boolean(localStorage.getItem('nss_volunteer_profile'))
+      );
+    } catch {
+      return false;
+    }
+  });
+
   const [userRole, setUserRole] = useState<UserRole>(() => {
     try {
-      if (sessionStorage.getItem('nss_admin_auth') === 'true') {
+      if (
+        localStorage.getItem('nss_admin_auth') === 'true' ||
+        sessionStorage.getItem('nss_admin_auth') === 'true'
+      ) {
         return 'admin';
+      }
+      if (
+        localStorage.getItem('nss_volunteer_auth') === 'true' ||
+        sessionStorage.getItem('nss_volunteer_auth') === 'true' ||
+        Boolean(localStorage.getItem('nss_volunteer_profile'))
+      ) {
+        return 'volunteer';
       }
     } catch {}
     return 'community';
   });
+
+  const [currentScreen, setCurrentScreen] = useState<AppScreen>(() => {
+    try {
+      if (
+        localStorage.getItem('nss_admin_auth') === 'true' ||
+        sessionStorage.getItem('nss_admin_auth') === 'true'
+      ) {
+        return 'admin';
+      }
+      if (
+        localStorage.getItem('nss_volunteer_auth') === 'true' ||
+        sessionStorage.getItem('nss_volunteer_auth') === 'true' ||
+        Boolean(localStorage.getItem('nss_volunteer_profile'))
+      ) {
+        return 'volunteer';
+      }
+    } catch {}
+    return 'welcome';
+  });
+
   const [adminTab, setAdminTab] = useState<AdminTab>('volunteers');
-  const [isVolunteerLoggedIn, setIsVolunteerLoggedIn] = useState<boolean>(false);
+
+  const [adminData, setAdminData] = useState<AdminData>(() => {
+    try {
+      const saved = localStorage.getItem('nss_admin_data');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch {}
+    return {
+      officerId: 'OFFICER-NSS-01',
+      officerName: 'Prof. S. R. Verma',
+      unit: 'CMRIT NSS Unit 1 (Hyderabad)',
+      email: 'coordinator@nss.org',
+      phone: '+91 98480 12345',
+      broadcastNote: 'Notice: Heavy rain expected this week. Check drainage hotspots and prioritize road safety notices.',
+    };
+  });
+
+  const updateAdminData = (data: Partial<AdminData>) => {
+    setAdminData((prev) => {
+      const updated = { ...prev, ...data };
+      try {
+        localStorage.setItem('nss_admin_data', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    try {
+      fetch('/api/admin/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }).catch(() => {});
+    } catch {}
+  };
 
   const [communityMembers, setCommunityMembers] = useState<CommunityMember[]>(() => {
     const saved = localStorage.getItem('nss_community_members');
@@ -370,6 +460,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return result;
         });
       }
+
+      // Sync volunteers from persistent backend API
+      try {
+        const apiRes = await fetch('/api/volunteers').then((r) => (r.ok ? r.json() : null));
+        if (apiRes && Array.isArray(apiRes.volunteers) && apiRes.volunteers.length > 0) {
+          const apiVolunteers: ProvisionedVolunteer[] = apiRes.volunteers.map((v: any) => ({
+            id: v.volunteer_id || v.id,
+            name: v.name,
+            unit: v.college_unit || 'Ward 4 Civic Unit',
+            role: v.role || 'Civic Action Cadet',
+            email: v.email || `${(v.volunteer_id || v.id).toLowerCase()}@nss.org`,
+            phone: v.phone || '',
+            passcode: v.passcode || 'cadet123',
+            status: (v.status?.toUpperCase() as 'ACTIVE' | 'SUSPENDED') || 'ACTIVE',
+            dateProvisioned: v.created_at ? new Date(v.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+            avatar: v.avatar || 'none',
+            hoursCompleted: v.hours_completed || 0,
+            civicWins: Math.floor((v.hours_completed || 0) / 6),
+          }));
+
+          setProvisionedVolunteers((prev) => {
+            const map = new Map<string, ProvisionedVolunteer>();
+            for (const v of prev) {
+              if (v && v.id) map.set(v.id.toUpperCase(), v);
+            }
+            for (const v of apiVolunteers) {
+              if (v && v.id && !map.has(v.id.toUpperCase())) {
+                map.set(v.id.toUpperCase(), v);
+              }
+            }
+            return Array.from(map.values());
+          });
+        }
+      } catch (apiVolErr) {
+        console.warn('API volunteers fetch notice:', apiVolErr);
+      }
+
+      // Sync admin data from persistent backend API
+      try {
+        const adminRes = await fetch('/api/admin/data').then((r) => (r.ok ? r.json() : null));
+        if (adminRes && adminRes.adminData) {
+          setAdminData((prev) => ({
+            ...prev,
+            ...adminRes.adminData,
+          }));
+        }
+      } catch {}
     } catch (err) {
       console.error('Failed to sync with Supabase database:', err);
     } finally {
@@ -525,6 +662,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setCurrentVolunteer(volunteerProfile);
       try {
+        localStorage.setItem('nss_volunteer_auth', 'true');
+        sessionStorage.setItem('nss_volunteer_auth', 'true');
         localStorage.setItem('nss_volunteer_profile', JSON.stringify(volunteerProfile));
       } catch {}
 
@@ -573,6 +712,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setCurrentVolunteer(volunteerProfile);
       try {
+        localStorage.setItem('nss_volunteer_auth', 'true');
+        sessionStorage.setItem('nss_volunteer_auth', 'true');
         localStorage.setItem('nss_volunteer_profile', JSON.stringify(volunteerProfile));
       } catch {}
 
@@ -588,6 +729,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await supabase.auth.signOut();
     } catch {}
     setIsVolunteerLoggedIn(false);
+    try {
+      localStorage.removeItem('nss_volunteer_auth');
+      sessionStorage.removeItem('nss_volunteer_auth');
+      localStorage.removeItem('nss_volunteer_profile');
+    } catch {}
     setUserRole('community');
     setCurrentScreen('welcome');
     showToast('Signed out of Volunteer terminal.');
@@ -612,6 +758,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setIsAdminLoggedIn(true);
             setIsVolunteerLoggedIn(false);
             try {
+              localStorage.setItem('nss_admin_auth', 'true');
+              localStorage.setItem('nss_admin_officer_id', idOrEmail);
               sessionStorage.setItem('nss_admin_auth', 'true');
               sessionStorage.setItem('nss_admin_officer_id', idOrEmail);
             } catch {}
@@ -635,9 +783,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ) {
         setIsAdminLoggedIn(true);
         setIsVolunteerLoggedIn(false);
+        const resolvedId = idOrEmail || 'OFFICER-NSS-01';
         try {
+          localStorage.setItem('nss_admin_auth', 'true');
+          localStorage.setItem('nss_admin_officer_id', resolvedId);
           sessionStorage.setItem('nss_admin_auth', 'true');
-          sessionStorage.setItem('nss_admin_officer_id', idOrEmail || 'OFFICER-NSS-01');
+          sessionStorage.setItem('nss_admin_officer_id', resolvedId);
         } catch {}
         setUserRole('admin');
         setCurrentScreen('admin');
@@ -653,9 +804,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (code) {
         setIsAdminLoggedIn(true);
         setIsVolunteerLoggedIn(false);
+        const resolvedId = idOrEmail || 'OFFICER-NSS-01';
         try {
+          localStorage.setItem('nss_admin_auth', 'true');
+          localStorage.setItem('nss_admin_officer_id', resolvedId);
           sessionStorage.setItem('nss_admin_auth', 'true');
-          sessionStorage.setItem('nss_admin_officer_id', idOrEmail || 'OFFICER-NSS-01');
+          sessionStorage.setItem('nss_admin_officer_id', resolvedId);
         } catch {}
         setUserRole('admin');
         setCurrentScreen('admin');
@@ -672,6 +826,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
     setIsAdminLoggedIn(false);
     try {
+      localStorage.removeItem('nss_admin_auth');
+      localStorage.removeItem('nss_admin_officer_id');
       sessionStorage.removeItem('nss_admin_auth');
       sessionStorage.removeItem('nss_admin_officer_id');
     } catch {}
@@ -2038,6 +2194,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateVolunteerProfile,
         adminTab,
         setAdminTab,
+        adminData,
+        updateAdminData,
       }}
     >
       {children}

@@ -49,12 +49,6 @@ export const AdminLoginScreen: React.FC = () => {
     }
   };
 
-  const handleFillDemo = () => {
-    setOfficerId('OFFICER-NSS-01');
-    setPasscode('1969');
-    setErrorMsg(null);
-  };
-
   return (
     <div className="h-full flex-1 flex flex-col justify-center px-4 pt-4 pb-8 max-w-md mx-auto w-full">
       {/* Top back link */}
@@ -182,18 +176,6 @@ export const AdminLoginScreen: React.FC = () => {
             <span>{isLoading ? 'Authenticating...' : 'Authenticate & Open Panel'}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
-
-          {/* Quick Demo Credentials Help */}
-          <div className="pt-2 border-t border-[#DEC0B8]/60 flex items-center justify-between text-xs text-[#6E5A4E]">
-            <span>Passcode: <code className="font-mono font-bold text-[#1D4ED8]">1969</code> or <code className="font-mono font-bold text-[#1D4ED8]">admin123</code></span>
-            <button
-              type="button"
-              onClick={handleFillDemo}
-              className="text-[11px] font-['Epilogue'] font-bold text-[#1D4ED8] hover:underline cursor-pointer"
-            >
-              Fill Demo Credentials
-            </button>
-          </div>
         </form>
       </div>
     </div>

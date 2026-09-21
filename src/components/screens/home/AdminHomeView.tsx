@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../../context/AppContext';
 import { Pushpin } from '../../common/Pushpin';
 import { WashiTape } from '../../common/WashiTape';
@@ -26,11 +26,19 @@ export const AdminHomeView: React.FC = () => {
     showToast,
     deleteProblem,
     setAdminTab,
+    adminData,
+    updateAdminData,
   } = useApp();
 
   const [broadcastMessage, setBroadcastMessage] = useState(
-    'Notice: Heavy rain expected this week. Check drainage hotspots and prioritize road safety notices.'
+    adminData?.broadcastNote || 'Notice: Heavy rain expected this week. Check drainage hotspots and prioritize road safety notices.'
   );
+
+  useEffect(() => {
+    if (adminData?.broadcastNote) {
+      setBroadcastMessage(adminData.broadcastNote);
+    }
+  }, [adminData?.broadcastNote]);
 
   const unassignedTasks = problems.filter((p) => p.status === 'REPORTED' && !p.assignedLead);
   const activeTasks = problems.filter((p) => p.status === 'IN_PROGRESS');
@@ -165,7 +173,10 @@ export const AdminHomeView: React.FC = () => {
             className="flex-1 px-3 py-2 text-xs rounded-xl bg-[#FAF6ED] border border-[#DEC0B8] text-[#1F1B17] focus:outline-hidden focus:border-[#1D4ED8]"
           />
           <button
-            onClick={() => showToast('Notice updated on community board.')}
+            onClick={() => {
+              updateAdminData({ broadcastNote: broadcastMessage });
+              showToast('Notice saved and pinned to community bulletin board.');
+            }}
             className="px-3.5 py-2 rounded-xl bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-['Epilogue'] font-bold cursor-pointer shrink-0"
           >
             Post Note

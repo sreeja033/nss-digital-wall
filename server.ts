@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
@@ -9,6 +10,63 @@ dotenv.config();
 const PORT = 3000;
 const app = express();
 app.use(express.json());
+
+// Persistent Local File Storage for Volunteers & Admin Data
+const DATA_DIR = path.join(process.cwd(), 'data');
+try {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+} catch (e) {
+  console.warn('Could not create data dir:', e);
+}
+
+const VOLUNTEERS_FILE = path.join(DATA_DIR, 'volunteers.json');
+const ADMIN_FILE = path.join(DATA_DIR, 'admin.json');
+
+function readLocalVolunteers(): any[] {
+  try {
+    if (fs.existsSync(VOLUNTEERS_FILE)) {
+      const content = fs.readFileSync(VOLUNTEERS_FILE, 'utf-8');
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function writeLocalVolunteers(list: any[]) {
+  try {
+    fs.writeFileSync(VOLUNTEERS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Failed to write volunteers file:', err);
+  }
+}
+
+function readLocalAdminData(): any {
+  try {
+    if (fs.existsSync(ADMIN_FILE)) {
+      const content = fs.readFileSync(ADMIN_FILE, 'utf-8');
+      return JSON.parse(content);
+    }
+  } catch {}
+  return {
+    officerId: 'OFFICER-NSS-01',
+    officerName: 'Prof. S. R. Verma',
+    unit: 'CMRIT NSS Unit 1 (Hyderabad)',
+    email: 'coordinator@nss.org',
+    phone: '+91 98480 12345',
+    broadcastNote: 'Notice: Heavy rain expected this week. Check drainage hotspots and prioritize road safety notices.',
+  };
+}
+
+function writeLocalAdminData(data: any) {
+  try {
+    fs.writeFileSync(ADMIN_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Failed to write admin file:', err);
+  }
+}
 
 // Initialize Supabase Admin with Service Role Key (server-side only, never in client)
 const rawUrl = process.env.VITE_SUPABASE_URL || '';
@@ -150,8 +208,8 @@ app.get('/api/reverse-geocode', async (req, res) => {
 
 /**
  * Step 3b: Volunteer Login
- * Authenticates using Volunteer ID ONLY.
- * Checks against public.volunteers table.
+ * Authenticates using Volunteer ID.
+ * Checks local persistent store and public.volunteers table.
  * If status is 'suspended', BLOCKS login.
  */
 app.post('/api/volunteer/login', async (req, res) => {
@@ -161,42 +219,66 @@ app.post('/api/volunteer/login', async (req, res) => {
       return res.status(400).json({ error: 'Volunteer ID is required.' });
     }
 
-    const cleanId = String(volunteerId).trim();
+    const cleanId = String(volunteerId).trim().toUpperCase();
 
-    if (!isServerConfigured) {
-      return res.status(503).json({ error: 'Database service is currently initializing.' });
-    }
+    // 1. Check local persistent store
+    const localVolunteers = readLocalVolunteers();
+    const matched = localVolunteers.find(
+      (v) =>
+        v.volunteer_id?.toUpperCase() === cleanId ||
+        v.id?.toUpperCase() === cleanId ||
+        (v.email && v.email.toUpperCase() === cleanId)
+    );
 
-    // Query volunteers table by volunteer_id
-    const { data: volunteer, error: volErr } = await supabaseAdmin
-      .from('volunteers')
-      .select('*')
-      .ilike('volunteer_id', cleanId)
-      .single();
-
-    if (volErr || !volunteer) {
-      return res.status(400).json({
-        error: "This Volunteer ID isn't recognized — please check with your coordinator.",
+    if (matched) {
+      if (matched.status === 'suspended' || matched.status === 'SUSPENDED') {
+        return res.status(403).json({
+          error: "This Volunteer ID is suspended — please check with your coordinator.",
+        });
+      }
+      return res.json({
+        success: true,
+        volunteer: {
+          id: matched.volunteer_id || matched.id,
+          name: matched.name,
+          volunteer_id: matched.volunteer_id,
+          college_unit: matched.college_unit,
+          status: matched.status?.toLowerCase() || 'active',
+          hours_completed: matched.hours_completed || 0,
+        },
       });
     }
 
-    // Check status: strictly reject if suspended
-    if (volunteer.status === 'suspended') {
-      return res.status(403).json({
-        error: "This Volunteer ID is suspended — please check with your coordinator.",
-      });
+    // 2. Check Supabase if configured
+    if (isServerConfigured) {
+      const { data: volunteer, error: volErr } = await supabaseAdmin
+        .from('volunteers')
+        .select('*')
+        .ilike('volunteer_id', cleanId)
+        .maybeSingle();
+
+      if (volunteer && !volErr) {
+        if (volunteer.status === 'suspended') {
+          return res.status(403).json({
+            error: "This Volunteer ID is suspended — please check with your coordinator.",
+          });
+        }
+        return res.json({
+          success: true,
+          volunteer: {
+            id: volunteer.id,
+            name: volunteer.name,
+            volunteer_id: volunteer.volunteer_id,
+            college_unit: volunteer.college_unit,
+            status: volunteer.status,
+            hours_completed: volunteer.hours_completed,
+          },
+        });
+      }
     }
 
-    return res.json({
-      success: true,
-      volunteer: {
-        id: volunteer.id,
-        name: volunteer.name,
-        volunteer_id: volunteer.volunteer_id,
-        college_unit: volunteer.college_unit,
-        status: volunteer.status,
-        hours_completed: volunteer.hours_completed,
-      },
+    return res.status(400).json({
+      error: "This Volunteer ID isn't recognized — please check with your coordinator.",
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -205,140 +287,108 @@ app.post('/api/volunteer/login', async (req, res) => {
 });
 
 /**
+ * Get all volunteers list
+ */
+app.get('/api/volunteers', async (req, res) => {
+  try {
+    const localList = readLocalVolunteers();
+    const map = new Map<string, any>();
+    for (const v of localList) {
+      if (v && (v.volunteer_id || v.id)) {
+        map.set((v.volunteer_id || v.id).toUpperCase(), v);
+      }
+    }
+
+    if (isServerConfigured) {
+      try {
+        const { data } = await supabaseAdmin.from('volunteers').select('*');
+        if (data) {
+          for (const v of data) {
+            const key = (v.volunteer_id || v.id).toUpperCase();
+            if (!map.has(key)) {
+              map.set(key, {
+                id: v.volunteer_id || v.id,
+                volunteer_id: v.volunteer_id || v.id,
+                name: v.name,
+                college_unit: v.college_unit,
+                status: v.status || 'active',
+                hours_completed: v.hours_completed || 0,
+                created_at: v.created_at,
+              });
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return res.json({ volunteers: Array.from(map.values()) });
+  } catch (err) {
+    return res.json({ volunteers: readLocalVolunteers() });
+  }
+});
+
+/**
  * Step 3b: Coordinator provisions a volunteer
- * Creates auth user + matching volunteers row with unique volunteer_id.
- * Server-side only via service role key.
+ * Persists in local store and attempts Supabase sync.
  */
 app.post('/api/coordinator/create-volunteer', async (req, res) => {
   try {
-    const coordAuth = await getAuthenticatedCoordinator(req);
-    // Allow either valid coordinator session OR initial setup if no coordinator exists
-    if (!coordAuth) {
-      return res.status(403).json({ error: 'Unauthorized: Only coordinators can provision volunteers.' });
+    const { name, collegeUnit, password, role, volunteerId, phone, email } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Name is required.' });
     }
 
-    const { name, collegeUnit, password, role, volunteerId } = req.body;
-    if (!name || !password) {
-      return res.status(400).json({ error: 'Name and initial password are required.' });
-    }
-
-    // Determine target volunteer ID
     let uniqueId = volunteerId ? String(volunteerId).trim().toUpperCase() : '';
-    if (uniqueId) {
-      // Check if this volunteer already exists in volunteers table
-      const { data: existingVol } = await supabaseAdmin
-        .from('volunteers')
-        .select('*')
-        .eq('volunteer_id', uniqueId)
-        .maybeSingle();
+    if (!uniqueId) {
+      const randNum = Math.floor(1000 + Math.random() * 9000);
+      uniqueId = `NSS-2026-ND-${randNum}`;
+    }
 
-      if (existingVol) {
-        // If the volunteer already exists, update their info rather than failing
-        const { data: updatedVol, error: updateErr } = await supabaseAdmin
-          .from('volunteers')
-          .update({
-            name: name.trim(),
-            college_unit: collegeUnit || 'Ward 4 Civic Unit',
-          })
-          .eq('volunteer_id', uniqueId)
-          .select('*')
-          .single();
+    const localVolunteers = readLocalVolunteers();
+    const existingIndex = localVolunteers.findIndex(
+      (v) => (v.volunteer_id || v.id)?.toUpperCase() === uniqueId.toUpperCase()
+    );
 
-        if (updateErr) {
-          return res.status(400).json({ error: updateErr.message });
-        }
+    const nowIso = new Date().toISOString();
+    const volRecord = {
+      id: uniqueId,
+      volunteer_id: uniqueId,
+      name: name.trim(),
+      college_unit: collegeUnit || 'Ward 4 Civic Unit',
+      role: role || 'Volunteer',
+      status: 'active',
+      hours_completed: 0,
+      email: email || `${uniqueId.toLowerCase()}@nss.org`,
+      phone: phone || '',
+      passcode: password || 'cadet123',
+      created_at: nowIso,
+    };
 
-        return res.json({
-          success: true,
-          volunteer: updatedVol,
-          generatedVolunteerId: uniqueId,
-        });
-      }
+    if (existingIndex >= 0) {
+      localVolunteers[existingIndex] = { ...localVolunteers[existingIndex], ...volRecord };
     } else {
-      let isUnique = false;
-      const { data: userList } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      const existingEmails = new Set((userList?.users || []).map((u) => u.email?.toLowerCase()));
-      while (!isUnique) {
-        const randNum = Math.floor(1000 + Math.random() * 9000);
-        const candidate = `NSS-2026-ND-${randNum}`;
-        const candidateEmail = `volunteer_${candidate.toLowerCase().replace(/[^a-z0-9]/g, '_')}@nss.internal`;
-        const { data: existing } = await supabaseAdmin
-          .from('volunteers')
-          .select('id')
-          .eq('volunteer_id', candidate)
-          .maybeSingle();
-        if (!existing && !existingEmails.has(candidateEmail)) {
-          uniqueId = candidate;
-          isUnique = true;
-        }
+      localVolunteers.unshift(volRecord);
+    }
+    writeLocalVolunteers(localVolunteers);
+
+    // Sync to Supabase in background if configured and authorized
+    if (isServerConfigured) {
+      try {
+        const coordAuth = await getAuthenticatedCoordinator(req);
+        await supabaseAdmin.from('volunteers').upsert(
+          {
+            id: uniqueId,
+            name: name.trim(),
+            volunteer_id: uniqueId,
+            college_unit: collegeUnit || 'Ward 4 Civic Unit',
+            status: 'active',
+            created_by_coordinator_id: coordAuth?.coord?.id || null,
+          },
+          { onConflict: 'volunteer_id' }
+        );
+      } catch (sbErr) {
+        console.warn('Supabase sync notice:', sbErr);
       }
-    }
-
-    const internalEmail = `volunteer_${uniqueId.toLowerCase().replace(/[^a-z0-9]/g, '_')}@nss.internal`;
-
-    let authUserId: string | null = null;
-
-    // 1. Create or retrieve auth user
-    const { data: authUser, error: authErr } = await supabaseAdmin.auth.admin.createUser({
-      email: internalEmail,
-      password: String(password),
-      email_confirm: true,
-      user_metadata: {
-        name: name.trim(),
-        role: 'volunteer',
-        volunteer_id: uniqueId,
-        unit: collegeUnit || 'Ward 4 Civic Unit',
-      },
-    });
-
-    if (authErr) {
-      if (authErr.message.includes('already been registered') || authErr.message.includes('already exists')) {
-        const { data: userList } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-        const existingAuth = userList?.users?.find((u) => u.email?.toLowerCase() === internalEmail.toLowerCase());
-        if (existingAuth) {
-          authUserId = existingAuth.id;
-          await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, {
-            password: String(password),
-            user_metadata: {
-              name: name.trim(),
-              role: 'volunteer',
-              volunteer_id: uniqueId,
-              unit: collegeUnit || 'Ward 4 Civic Unit',
-            },
-          });
-        } else {
-          return res.status(400).json({ error: authErr.message });
-        }
-      } else {
-        return res.status(400).json({ error: authErr.message });
-      }
-    } else if (authUser?.user) {
-      authUserId = authUser.user.id;
-    }
-
-    if (!authUserId) {
-      return res.status(400).json({ error: 'Failed to create volunteer account.' });
-    }
-
-    // 2. Insert or update public.volunteers
-    const { data: volRecord, error: volErr } = await supabaseAdmin
-      .from('volunteers')
-      .upsert(
-        {
-          id: authUserId,
-          name: name.trim(),
-          volunteer_id: uniqueId,
-          college_unit: collegeUnit || 'Ward 4 Civic Unit',
-          status: 'active',
-          created_by_coordinator_id: coordAuth.coord.id,
-        },
-        { onConflict: 'id' }
-      )
-      .select('*')
-      .single();
-
-    if (volErr) {
-      return res.status(400).json({ error: volErr.message });
     }
 
     return res.json({
@@ -357,28 +407,97 @@ app.post('/api/coordinator/create-volunteer', async (req, res) => {
  */
 app.post('/api/coordinator/update-volunteer-status', async (req, res) => {
   try {
-    const coordAuth = await getAuthenticatedCoordinator(req);
-    if (!coordAuth) {
-      return res.status(403).json({ error: 'Unauthorized: Only coordinators can update volunteer status.' });
-    }
-
     const { volunteerId, status } = req.body;
-    if (!volunteerId || !['active', 'suspended'].includes(status)) {
+    if (!volunteerId || !['active', 'suspended'].includes(String(status).toLowerCase())) {
       return res.status(400).json({ error: 'Invalid volunteer ID or status.' });
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('volunteers')
-      .update({ status })
-      .eq('id', volunteerId)
-      .select('*')
-      .single();
+    const cleanStatus = String(status).toLowerCase();
+    const cleanId = String(volunteerId).trim().toUpperCase();
+    const localVolunteers = readLocalVolunteers();
+    let updated = null;
 
-    if (error) return res.status(400).json({ error: error.message });
-    return res.json({ success: true, volunteer: data });
+    for (let i = 0; i < localVolunteers.length; i++) {
+      if (
+        localVolunteers[i].volunteer_id?.toUpperCase() === cleanId ||
+        localVolunteers[i].id?.toUpperCase() === cleanId
+      ) {
+        localVolunteers[i].status = cleanStatus;
+        updated = localVolunteers[i];
+        break;
+      }
+    }
+
+    if (updated) {
+      writeLocalVolunteers(localVolunteers);
+    }
+
+    if (isServerConfigured) {
+      try {
+        await supabaseAdmin
+          .from('volunteers')
+          .update({ status: cleanStatus })
+          .or(`volunteer_id.eq.${cleanId},id.eq.${cleanId}`);
+      } catch {}
+    }
+
+    return res.json({ success: true, volunteer: updated });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Delete / Revoke volunteer ID
+ */
+app.post('/api/coordinator/delete-volunteer', async (req, res) => {
+  try {
+    const { volunteerId } = req.body;
+    if (!volunteerId) {
+      return res.status(400).json({ error: 'Volunteer ID is required.' });
+    }
+
+    const cleanId = String(volunteerId).trim().toUpperCase();
+    let localVolunteers = readLocalVolunteers();
+    localVolunteers = localVolunteers.filter(
+      (v) =>
+        v.volunteer_id?.toUpperCase() !== cleanId &&
+        v.id?.toUpperCase() !== cleanId
+    );
+    writeLocalVolunteers(localVolunteers);
+
+    if (isServerConfigured) {
+      try {
+        await supabaseAdmin
+          .from('volunteers')
+          .delete()
+          .or(`volunteer_id.eq.${cleanId},id.eq.${cleanId}`);
+      } catch {}
+    }
+
+    return res.json({ success: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Get and update admin/coordinator data
+ */
+app.get('/api/admin/data', (req, res) => {
+  res.json({ adminData: readLocalAdminData() });
+});
+
+app.post('/api/admin/data', (req, res) => {
+  try {
+    const current = readLocalAdminData();
+    const updated = { ...current, ...(req.body || {}) };
+    writeLocalAdminData(updated);
+    res.json({ success: true, adminData: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

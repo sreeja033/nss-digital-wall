@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Pushpin } from '../common/Pushpin';
 import { RubberStamp } from '../common/RubberStamp';
@@ -50,6 +50,8 @@ export const AdminScreen: React.FC = () => {
     showToast,
     adminTab,
     setAdminTab,
+    adminData,
+    updateAdminData,
   } = useApp();
 
   if (!isAdminLoggedIn) {
@@ -61,8 +63,14 @@ export const AdminScreen: React.FC = () => {
   const setActiveTab = setAdminTab;
 
   const [broadcastText, setBroadcastText] = useState(
-    'Notice: Heavy rain expected this week. Check drainage hotspots and prioritize road safety notices.'
+    adminData?.broadcastNote || 'Notice: Heavy rain expected this week. Check drainage hotspots and prioritize road safety notices.'
   );
+
+  useEffect(() => {
+    if (adminData?.broadcastNote) {
+      setBroadcastText(adminData.broadcastNote);
+    }
+  }, [adminData?.broadcastNote]);
   const [moderationSearch, setModerationSearch] = useState('');
   const [moderationFilter, setModerationFilter] = useState<'PENDING' | 'ALL' | 'URGENT'>('PENDING');
 
@@ -362,14 +370,14 @@ export const AdminScreen: React.FC = () => {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <h1 className="font-['Epilogue'] font-black text-lg text-[#1F1B17] truncate">
-                    Dr. R. Verma
+                    {adminData?.officerName || 'Prof. S. R. Verma'}
                   </h1>
                   <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#EBF3FF] text-[#1D4ED8] border border-[#93C5FD]">
                     Coordinator
                   </span>
                 </div>
                 <p className="text-[11px] font-mono text-[#1D4ED8] font-bold">
-                  ID: NSS-COORD-001 • Unit #04
+                  ID: {adminData?.officerId || 'OFFICER-NSS-01'} • {adminData?.unit || 'CMRIT NSS Unit 1'}
                 </p>
                 <p className="text-xs text-[#57423C]">Helps organize volunteers and track fixes</p>
               </div>
@@ -539,7 +547,10 @@ export const AdminScreen: React.FC = () => {
                 className="flex-1 px-3 py-2 text-xs rounded-xl bg-[#FAF6ED] border border-[#DEC0B8] text-[#1F1B17] focus:outline-hidden focus:border-[#1D4ED8]"
               />
               <button
-                onClick={() => showToast('Notice updated on community board.')}
+                onClick={() => {
+                  updateAdminData({ broadcastNote: broadcastText });
+                  showToast('Notice saved and pinned to community bulletin board.');
+                }}
                 className="px-3.5 py-2 rounded-xl bg-[#1D4ED8] hover:bg-[#1E40AF] text-white text-xs font-['Epilogue'] font-bold cursor-pointer shrink-0"
               >
                 Post Note
