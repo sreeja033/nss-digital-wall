@@ -32,6 +32,7 @@ export function toUiCategory(dbCategory: string): ProblemCategory {
 // Map DB status to UI status
 export function toUiStatus(dbStatus: string): ProblemStatus {
   switch (dbStatus) {
+    case 'pending_review': return 'PENDING_REVIEW';
     case 'in_progress': return 'IN_PROGRESS';
     case 'solved': return 'SOLVED';
     default: return 'REPORTED';
@@ -39,8 +40,9 @@ export function toUiStatus(dbStatus: string): ProblemStatus {
 }
 
 // Map UI status to DB status
-export function toDbStatus(uiStatus: ProblemStatus): 'reported' | 'in_progress' | 'solved' | 'rejected' {
+export function toDbStatus(uiStatus: ProblemStatus): 'pending_review' | 'reported' | 'in_progress' | 'solved' | 'rejected' {
   switch (uiStatus) {
+    case 'PENDING_REVIEW': return 'pending_review';
     case 'IN_PROGRESS': return 'in_progress';
     case 'SOLVED': return 'solved';
     default: return 'reported';
@@ -191,6 +193,15 @@ export async function fetchAllProblems(): Promise<{ data: Problem[]; error: stri
         description: p.description,
         category: toUiCategory(p.category),
         status: toUiStatus(p.status),
+        moderationStatus: p.status === 'pending_review' ? ('PENDING' as const) : ('APPROVED' as const),
+        isApproved: p.status !== 'pending_review',
+        imageHash: p.image_hash || undefined,
+        possibleReusedPhoto: Boolean(p.possible_reused_photo),
+        aiPhotoMatchResult: p.ai_photo_match_result || undefined,
+        aiPhotoFlagged: Boolean(p.ai_photo_flagged),
+        aiPhotoRawResponse: p.ai_photo_raw_response || undefined,
+        reflaggedByCommunity: Boolean(p.reflagged_by_community),
+        flagCount: p.flag_count || 0,
         location: p.location_text,
         landmark: p.landmark || undefined,
         coordinates: p.lat && p.lng ? { lat: Number(p.lat), lng: Number(p.lng) } : undefined,
@@ -235,6 +246,11 @@ export async function createProblemInDb(params: {
   urgent: boolean;
   anonymous: boolean;
   photoUrl?: string;
+  imageHash?: string;
+  possibleReusedPhoto?: boolean;
+  aiPhotoMatchResult?: 'MATCH' | 'MISMATCH' | 'UNCLEAR';
+  aiPhotoFlagged?: boolean;
+  aiPhotoRawResponse?: string;
   reportedByUserId?: string | null;
 }): Promise<{ success: boolean; duplicateLinked: boolean; problemId: string; error?: string }> {
   try {
@@ -256,7 +272,7 @@ export async function createProblemInDb(params: {
       };
     }
 
-    // Insert new problem row
+    // Insert new problem row - default status is 'pending_review'
     const { data: newProb, error: insertErr } = await supabase
       .from('problems')
       .insert({
@@ -269,8 +285,10 @@ export async function createProblemInDb(params: {
         lng: params.coordinates?.lng ?? null,
         is_urgent: Boolean(params.urgent),
         photo_url: params.photoUrl || null,
+        image_hash: params.imageHash || null,
+        possible_reused_photo: Boolean(params.possibleReusedPhoto),
         reported_by_user_id: params.anonymous ? null : params.reportedByUserId || null,
-        status: 'reported',
+        status: 'pending_review',
       })
       .select('id')
       .single();
@@ -302,6 +320,88 @@ export async function createProblemInDb(params: {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, duplicateLinked: false, problemId: '', error: msg };
+  }
+}
+
+/**
+ * Approve a problem in DB (move from pending_review to reported)
+ */
+export async function approveProblemInDb(problemId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('problems')
+      .update({
+        status: 'reported',
+        reflagged_by_community: false,
+        flag_count: 0,
+      })
+      .eq('id', problemId);
+
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Reject / remove spam in DB
+ */
+export async function rejectProblemInDb(problemId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('problems')
+      .update({ status: 'rejected' })
+      .eq('id', problemId);
+
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Flag a problem for community moderation review
+ */
+export async function flagProblemInDb(params: {
+  problemId: string;
+  sessionToken?: string;
+  userId?: string | null;
+  reason?: string;
+}): Promise<{ success: boolean; flagCount: number; reflaggedToPending: boolean; error?: string }> {
+  try {
+    // Record flag in problem_flags
+    await supabase.from('problem_flags').insert({
+      problem_id: params.problemId,
+      session_token: params.sessionToken || null,
+      community_user_id: params.userId || null,
+      reason: params.reason || 'Flagged by community member',
+    });
+
+    const { data: prob } = await supabase
+      .from('problems')
+      .select('flag_count, status')
+      .eq('id', params.problemId)
+      .single();
+
+    const currentCount = (prob?.flag_count || 0) + 1;
+    const shouldReflag = currentCount >= 3;
+
+    await supabase
+      .from('problems')
+      .update({
+        flag_count: currentCount,
+        reflagged_by_community: shouldReflag,
+        ...(shouldReflag ? { status: 'pending_review' } : {}),
+      })
+      .eq('id', params.problemId);
+
+    return { success: true, flagCount: currentCount, reflaggedToPending: shouldReflag };
+  } catch (err: unknown) {
+    return { success: false, flagCount: 1, reflaggedToPending: false, error: String(err) };
   }
 }
 

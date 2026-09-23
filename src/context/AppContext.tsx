@@ -25,6 +25,9 @@ import {
   fetchAllProblems,
   fetchVolunteersFromDb,
   createProblemInDb,
+  approveProblemInDb,
+  rejectProblemInDb,
+  flagProblemInDb,
   assignProblemInDb,
   selfClaimProblemInDb,
   resolveProblemInDb,
@@ -33,6 +36,8 @@ import {
   toggleAdoptionInDb,
 } from '../lib/supabaseService';
 import { isSupabaseConfigured } from '../lib/supabase';
+import { checkReportRateLimit, recordReportSubmission } from '../utils/rateLimiter';
+import { hammingDistance } from '../utils/imageValidation';
 
 interface AppContextType {
   isLoadingData: boolean;
@@ -105,7 +110,13 @@ interface AppContextType {
     urgent: boolean;
     anonymous: boolean;
     photoUrl?: string;
-  }) => Promise<{ success: boolean; duplicateLinked: boolean; problemId: string }> | { success: boolean; duplicateLinked: boolean; problemId: string };
+    imageHash?: string;
+    possibleReusedPhoto?: boolean;
+    aiPhotoMatchResult?: 'MATCH' | 'MISMATCH' | 'UNCLEAR';
+    aiPhotoFlagged?: boolean;
+    aiPhotoRawResponse?: string;
+  }) => Promise<{ success: boolean; duplicateLinked: boolean; problemId: string; rateLimited?: boolean }> | { success: boolean; duplicateLinked: boolean; problemId: string; rateLimited?: boolean };
+  flagProblem: (problemId: string, reason?: string) => Promise<void> | void;
   claimProblem: (problemId: string, squadName?: string) => void;
   volunteerApproveTask: (problemId: string, squadName?: string) => void;
   assignProblemToVolunteer: (
@@ -1416,6 +1427,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleUpvote = async (problemId: string) => {
+    const target = problems.find((p) => p.id === problemId);
+    if (target && (target.status === 'PENDING_REVIEW' || target.moderationStatus === 'PENDING' || !target.isApproved)) {
+      showToast('This report is awaiting coordinator approval. Upvoting is enabled once approved.');
+      return;
+    }
+
     const alreadyUpvoted = upvotedProblemIds.includes(problemId);
     setUpvotedProblemIds((prev) =>
       alreadyUpvoted ? prev.filter((id) => id !== problemId) : [...prev, problemId]
@@ -1443,6 +1460,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleAdopt = async (problemId: string) => {
+    const target = problems.find((p) => p.id === problemId);
+    if (target && (target.status === 'PENDING_REVIEW' || target.moderationStatus === 'PENDING' || !target.isApproved)) {
+      showToast('This report is awaiting coordinator approval. Watching is enabled once approved.');
+      return;
+    }
+
     const alreadyAdopted = adoptedProblemIds.includes(problemId);
     setAdoptedProblemIds((prev) =>
       alreadyAdopted ? prev.filter((id) => id !== problemId) : [...prev, problemId]
@@ -1486,7 +1509,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     urgent: boolean;
     anonymous: boolean;
     photoUrl?: string;
-  }): Promise<{ success: boolean; duplicateLinked: boolean; problemId: string }> => {
+    imageHash?: string;
+    possibleReusedPhoto?: boolean;
+    aiPhotoMatchResult?: 'MATCH' | 'MISMATCH' | 'UNCLEAR';
+    aiPhotoFlagged?: boolean;
+    aiPhotoRawResponse?: string;
+  }): Promise<{ success: boolean; duplicateLinked: boolean; problemId: string; rateLimited?: boolean }> => {
+    // 0. Rate Limiting enforcement (5 reports/hour for anonymous, 8/hour for logged-in members)
+    const userIdentifier = currentCommunityMember?.id || localStorage.getItem('nss_session_token') || 'anon-session';
+    const rateCheck = checkReportRateLimit(userIdentifier, Boolean(currentCommunityMember?.id));
+    if (!rateCheck.allowed) {
+      showToast(rateCheck.message || "You've submitted several reports recently — please wait a bit before submitting more.");
+      return { success: false, duplicateLinked: false, problemId: '', rateLimited: true };
+    }
+
+    // Detect reused/duplicate photo across known reports
+    let isPossibleReusedPhoto = Boolean(report.possibleReusedPhoto);
+    if (!isPossibleReusedPhoto && report.imageHash) {
+      const duplicatePhotoMatch = problems.some(
+        (p) => p.imageHash && hammingDistance(p.imageHash, report.imageHash!) <= 4
+      );
+      if (duplicatePhotoMatch) {
+        isPossibleReusedPhoto = true;
+      }
+    }
+
     // 1. Try submitting to Supabase database first
     try {
       const dbRes = await createProblemInDb({
@@ -1499,16 +1546,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         urgent: report.urgent,
         anonymous: report.anonymous,
         photoUrl: report.photoUrl,
+        imageHash: report.imageHash,
+        possibleReusedPhoto: isPossibleReusedPhoto,
         reportedByUserId: currentCommunityMember?.id || null,
       });
 
       if (dbRes.success) {
+        recordReportSubmission(userIdentifier);
         if (dbRes.duplicateLinked) {
           showToast(`Similar report found in database! Linked to existing notice #${dbRes.problemId.slice(-4)}.`);
           await refreshData();
           return { success: true, duplicateLinked: true, problemId: dbRes.problemId };
         } else {
-          showToast('Report submitted and stored in database! Sent to Coordinator moderation queue.');
+          showToast('Report submitted! It is in Pending Review awaiting coordinator approval before appearing on the public wall.');
           await refreshData();
           return { success: true, duplicateLinked: false, problemId: dbRes.problemId };
         }
@@ -1596,20 +1646,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newReportTitle: report.title,
       });
 
+      recordReportSubmission(userIdentifier);
       showToast(`Similar report found! Linked to existing notice #${similar.id.slice(-4)}.`);
       return { success: true, duplicateLinked: true, problemId: similar.id };
     }
 
-    // New report creation: sent to admins for moderation and volunteer assignment
+    // New report creation: default status is PENDING_REVIEW before public visibility
     const newId = `report-${Date.now()}`;
     const newProblem: Problem = {
       id: newId,
       title: report.title,
       description: report.description,
       category: report.category,
-      status: 'REPORTED',
+      status: 'PENDING_REVIEW',
       moderationStatus: 'PENDING',
       isApproved: false,
+      imageHash: report.imageHash,
+      possibleReusedPhoto: isPossibleReusedPhoto,
+      aiPhotoMatchResult: report.aiPhotoMatchResult,
+      aiPhotoFlagged: Boolean(report.aiPhotoFlagged),
+      aiPhotoRawResponse: report.aiPhotoRawResponse,
+      reflaggedByCommunity: false,
+      flagCount: 0,
       location: report.location,
       landmark: report.landmark,
       coordinates: report.coordinates,
@@ -1618,8 +1676,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       reportedByUserId: report.anonymous ? null : (currentCommunityMember?.id || null),
       reportedByAuthor: report.anonymous ? 'Anonymous Resident' : (currentCommunityMember?.fullName || 'Community Resident'),
       createdAt: 'Just now',
-      upvotes: 1,
-      adoptersCount: 1,
+      upvotes: 0,
+      adoptersCount: 0,
       linkedDuplicatesCount: 0,
       photoUrl:
         report.photoUrl ||
@@ -1632,7 +1690,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           role: 'Citizen Report',
           timestamp: 'Just now',
           description: report.description,
-          tag: 'REPORTED',
+          tag: 'PENDING_REVIEW',
         },
       ],
       comments: [],
@@ -1640,8 +1698,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setMyReportedProblemIds((prev) => [newId, ...prev]);
     setProblems((prev) => [newProblem, ...prev]);
-    setUpvotedProblemIds((prev) => [...prev, newId]);
-    setAdoptedProblemIds((prev) => [...prev, newId]);
 
     // Force immediate sync to localStorage so navigating away never drops it
     try {
@@ -1653,11 +1709,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('nss_my_reported_ids', JSON.stringify([newId, ...(Array.isArray(parsedIds) ? parsedIds : [])]));
     } catch {}
 
+    // Record submission for rate limiting
+    recordReportSubmission(userIdentifier);
+
     // Notify coordinator/admin
     const newNotif: AppNotification = {
       id: `notif-${Date.now()}`,
-      title: 'New Community Report: Awaiting Officer Assignment',
-      message: `"${report.title}" in ${report.category} submitted. Awaiting officer review & volunteer dispatch.`,
+      title: 'New Community Report: Pending Moderation Review',
+      message: `"${report.title}" in ${report.category} submitted. Awaiting officer review & approval before public corkboard display.`,
       timestamp: 'Just now',
       read: false,
       problemId: newId,
@@ -1665,7 +1724,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setNotifications((prev) => [newNotif, ...prev]);
 
-    showToast('Report submitted! Sent to NSS officers for review and volunteer squad assignment.');
+    showToast('Report submitted! It is in Pending Review awaiting coordinator approval before appearing on the public wall.');
     return { success: true, duplicateLinked: false, problemId: newId };
   };
 
@@ -1858,7 +1917,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Assignment declined. Notice returned to coordinator queue.');
   };
 
-  const approveProblem = (problemId: string) => {
+  const approveProblem = async (problemId: string) => {
     setProblems((prev) =>
       prev.map((p) => {
         if (p.id === problemId) {
@@ -1872,20 +1931,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
           return {
             ...p,
+            status: 'REPORTED' as const,
             moderationStatus: 'APPROVED' as const,
             isApproved: true,
+            reflaggedByCommunity: false,
+            flagCount: 0,
             updates: [newUpdate, ...p.updates],
           };
         }
         return p;
       })
     );
+
+    try {
+      await approveProblemInDb(problemId);
+    } catch (e) {
+      console.warn('DB approveProblem sync error:', e);
+    }
+
     showToast('Report approved! Visible on Problem Wall and ready for volunteer assignment.');
   };
 
-  const rejectProblem = (problemId: string, reason?: string) => {
+  const rejectProblem = async (problemId: string, reason?: string) => {
     setProblems((prev) => prev.filter((p) => p.id !== problemId));
+    try {
+      const existing = localStorage.getItem('nss_voice_problems');
+      if (existing) {
+        const parsed = JSON.parse(existing);
+        if (Array.isArray(parsed)) {
+          localStorage.setItem('nss_voice_problems', JSON.stringify(parsed.filter((p: any) => p.id !== problemId)));
+        }
+      }
+    } catch {}
+
+    try {
+      await rejectProblemInDb(problemId);
+    } catch (e) {
+      console.warn('DB rejectProblem error:', e);
+    }
     showToast('Report rejected and removed from moderation queue.');
+  };
+
+  const flagProblem = async (problemId: string, reason?: string) => {
+    const sessionToken = localStorage.getItem('nss_session_token') || 'anon-session';
+    const userId = currentCommunityMember?.id;
+
+    const existingProblem = problems.find((p) => p.id === problemId);
+    if (!existingProblem) return;
+
+    const flaggedTokens = existingProblem.flaggedSessionTokens || [];
+    const flaggedUsers = existingProblem.flaggedUserIds || [];
+
+    if (
+      (userId && flaggedUsers.includes(userId)) ||
+      (!userId && flaggedTokens.includes(sessionToken))
+    ) {
+      showToast('You have already flagged this report for coordinator review.');
+      return;
+    }
+
+    const currentFlags = existingProblem.flagCount || 0;
+    const newFlagCount = currentFlags + 1;
+    const shouldMoveToPending = newFlagCount >= 3;
+
+    setProblems((prev) =>
+      prev.map((p) => {
+        if (p.id === problemId) {
+          return {
+            ...p,
+            flagCount: newFlagCount,
+            flaggedSessionTokens: [...flaggedTokens, sessionToken],
+            flaggedUserIds: userId ? [...flaggedUsers, userId] : flaggedUsers,
+            reflaggedByCommunity: shouldMoveToPending ? true : p.reflaggedByCommunity,
+            status: shouldMoveToPending ? ('PENDING_REVIEW' as const) : p.status,
+            moderationStatus: shouldMoveToPending ? ('PENDING' as const) : p.moderationStatus,
+            isApproved: shouldMoveToPending ? false : p.isApproved,
+          };
+        }
+        return p;
+      })
+    );
+
+    try {
+      await flagProblemInDb({
+        problemId,
+        sessionToken,
+        userId: userId || null,
+        reason: reason || 'Flagged by resident',
+      });
+    } catch (e) {
+      console.warn('DB flagProblem error:', e);
+    }
+
+    if (shouldMoveToPending) {
+      showToast('Notice received multiple community flags and has been sent back for coordinator review.');
+    } else {
+      showToast('Report flagged for coordinator review. Thank you for helping keep the corkboard clean.');
+    }
   };
 
   // Add Progress Update with optional photo
@@ -1893,6 +2035,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     problemId: string,
     update: { description: string; photoUrl?: string; tag?: string }
   ) => {
+    const target = problems.find((p) => p.id === problemId);
+    if (target && (target.status === 'PENDING_REVIEW' || target.moderationStatus === 'PENDING' || !target.isApproved)) {
+      showToast('This report is awaiting coordinator approval. Progress updates can only be posted once approved.');
+      return;
+    }
+
     try {
       if (update.photoUrl) {
         await logActionInDb({
@@ -2057,6 +2205,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addComment = (problemId: string, text: string) => {
     if (!text.trim()) return;
+    const target = problems.find((p) => p.id === problemId);
+    if (target && (target.status === 'PENDING_REVIEW' || target.moderationStatus === 'PENDING' || !target.isApproved)) {
+      showToast('This report is awaiting coordinator approval. Notes become available once approved.');
+      return;
+    }
     const newComment = {
       id: `c-${Date.now()}`,
       author: isVolunteerLoggedIn
@@ -2177,6 +2330,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         declineAssignment,
         approveProblem,
         rejectProblem,
+        flagProblem,
         markNotificationAsRead,
         markAllNotificationsAsRead,
         addProgressUpdate,

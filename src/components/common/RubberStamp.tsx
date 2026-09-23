@@ -15,7 +15,24 @@ export const RubberStamp: React.FC<RubberStampProps> = ({
   className = '',
 }) => {
   // Distinct visual configurations matching the design screens
-  const config = {
+  const configMap: Record<ProblemStatus, {
+    text: string;
+    defaultRot: number;
+    border: string;
+    textColor: string;
+    bgColor: string;
+    boxShadow: string;
+    icon: string;
+  }> = {
+    PENDING_REVIEW: {
+      text: 'UNDER REVIEW',
+      defaultRot: -1,
+      border: 'border-2 border-[#1D4ED8] border-dashed',
+      textColor: 'text-[#1D4ED8]',
+      bgColor: 'bg-[#EFF6FF]/90',
+      boxShadow: 'shadow-[inset_0_0_0_1px_rgba(29,78,216,0.3)]',
+      icon: '⏳',
+    },
     REPORTED: {
       text: 'REPORTED',
       defaultRot: -3,
@@ -43,7 +60,9 @@ export const RubberStamp: React.FC<RubberStampProps> = ({
       boxShadow: 'shadow-[inset_0_0_0_1px_rgba(27,75,67,0.4)]',
       icon: '✓',
     },
-  }[status];
+  };
+
+  const config = configMap[status] || configMap.REPORTED;
 
   const sizeClasses = {
     sm: 'text-[10px] py-0.5 px-2 tracking-widest font-extrabold',

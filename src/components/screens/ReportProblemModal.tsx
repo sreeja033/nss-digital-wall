@@ -32,6 +32,7 @@ import {
   Map as MapIcon,
 } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/dateUtils';
+import { validateImageFile, computeImageHashFromUrl } from '../../utils/imageValidation';
 
 const DRAFT_STORAGE_KEY = 'community_bulletin_report_draft';
 
@@ -62,9 +63,69 @@ export const ReportProblemModal: React.FC = () => {
   const [anonymous, setAnonymous] = useState(true);
   const [authorName, setAuthorName] = useState(() => currentCommunityMember?.fullName || '');
   const [photoUrl, setPhotoUrl] = useState<string>('');
+  const [photoImageHash, setPhotoImageHash] = useState<string | null>(null);
+  const [photoValidationError, setPhotoValidationError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formSubmitted, setFormSubmitted] = useState(false);
   const [validationErrors, setValidationErrors] = useState<{ [key: string]: string }>({});
+
+  // AI Vision Photo Validation (runs once per uploaded photo)
+  const [isCheckingPhoto, setIsCheckingPhoto] = useState(false);
+  const [photoCheckResult, setPhotoCheckResult] = useState<'MATCH' | 'MISMATCH' | 'UNCLEAR' | null>(null);
+  const [photoCheckRawResponse, setPhotoCheckRawResponse] = useState<string | null>(null);
+  const [confirmedDespiteMismatch, setConfirmedDespiteMismatch] = useState(false);
+  const [showMismatchDialog, setShowMismatchDialog] = useState(false);
+  const lastCheckedPhotoRef = useRef<string | null>(null);
+
+  const runAiPhotoCheck = async (
+    url: string,
+    catOverride?: string,
+    descOverride?: string
+  ): Promise<'MATCH' | 'MISMATCH' | 'UNCLEAR'> => {
+    if (!url) return 'MATCH';
+    // Only run once per photo upload
+    if (url === lastCheckedPhotoRef.current && photoCheckResult) {
+      return photoCheckResult;
+    }
+
+    lastCheckedPhotoRef.current = url;
+    setIsCheckingPhoto(true);
+    setConfirmedDespiteMismatch(false);
+
+    const effCat = catOverride || (isCustomCategory ? customCategoryText.trim() : category) || 'General';
+    const effDesc = descOverride || description.trim() || title.trim() || effCat;
+
+    try {
+      const resp = await fetch('/api/check-photo-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          photo: url,
+          category: effCat,
+          description: effDesc,
+        }),
+      });
+
+      if (!resp.ok) {
+        // Fail open safeguard
+        setPhotoCheckResult('MATCH');
+        return 'MATCH';
+      }
+
+      const data = await resp.json();
+      const resVal: 'MATCH' | 'MISMATCH' | 'UNCLEAR' = data?.result || 'MATCH';
+      setPhotoCheckResult(resVal);
+      setPhotoCheckRawResponse(data?.rawResponse || null);
+      return resVal;
+    } catch (err) {
+      console.warn('AI photo check failed open:', err);
+      // Fail open safeguard: allow submission to proceed normally
+      setPhotoCheckResult('MATCH');
+      return 'MATCH';
+    } finally {
+      setIsCheckingPhoto(false);
+    }
+  };
 
   // Compulsory field validation calculations
   const getValidationErrors = () => {
@@ -135,6 +196,12 @@ export const ReportProblemModal: React.FC = () => {
   const [isManualSaving, setIsManualSaving] = useState(false);
   const [draftBannerDismissed, setDraftBannerDismissed] = useState(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [submittedPendingData, setSubmittedPendingData] = useState<{
+    problemId: string;
+    title: string;
+    category: string;
+    location: string;
+  } | null>(null);
   const isInitialMount = useRef(true);
 
   // Camera state & refs
@@ -161,6 +228,10 @@ export const ReportProblemModal: React.FC = () => {
     {
       label: 'Cracked sidewalk',
       url: 'https://lh3.googleusercontent.com/aida-public/AB6AXuDG7-2IMa5U2nrxLAxScYoxlN66f-aZclj4BHkjbMV9AZ9tisz4OWKz2N7zh4NWooAdfNOwseyxfG6DcjE5QSZ479fIUFOKKg_DPPkbpuf5rwQ3IgCaVU3uktCSkJzJIrT3Y1u1Luth26ex0kxdrHLdPmXesGZ8fq3qYGVCU7oh9ynqtYAmBXq7mWFXlR9LhYP0cTrnoGAR9xpuNhlKAsIrafhElZZ4NwgMNMtXylfcXUbWLq2M5LRtXw',
+    },
+    {
+      label: 'Random/Cat (Test Mismatch)',
+      url: 'https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=600&auto=format&fit=crop&q=80',
     },
   ];
 
@@ -222,7 +293,10 @@ export const ReportProblemModal: React.FC = () => {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       setPhotoUrl(dataUrl);
+      setPhotoValidationError(null);
+      computeImageHashFromUrl(dataUrl).then(setPhotoImageHash).catch(() => {});
       stopCamera();
+      runAiPhotoCheck(dataUrl);
     }
   };
 
@@ -240,15 +314,30 @@ export const ReportProblemModal: React.FC = () => {
     startCamera(nextFacing);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPhotoUrl(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    setPhotoValidationError(null);
+    const valResult = await validateImageFile(file);
+    if (!valResult.valid) {
+      setPhotoValidationError(valResult.error || 'Invalid photo file.');
+      showToast(valResult.error || 'Invalid photo file.');
+      e.target.value = '';
+      return;
     }
+
+    setPhotoImageHash(valResult.imageHash || null);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const dataUri = reader.result as string;
+      setPhotoUrl(dataUri);
+      if (validationErrors.photo) {
+        setValidationErrors((prev) => ({ ...prev, photo: '' }));
+      }
+      runAiPhotoCheck(dataUri);
+    };
+    reader.readAsDataURL(file);
   };
 
   // Reverse geocodes lat/lng into human-readable street & neighborhood details
@@ -673,6 +762,18 @@ export const ReportProblemModal: React.FC = () => {
       ? customCategoryText.trim()
       : category;
 
+    // Run or await AI photo check if not completed yet
+    let finalCheckResult = photoCheckResult;
+    if (photoUrl && (!finalCheckResult || lastCheckedPhotoRef.current !== photoUrl)) {
+      finalCheckResult = await runAiPhotoCheck(photoUrl, effectiveCategory, description.trim());
+    }
+
+    // If MISMATCH and the user hasn't acknowledged the warning yet, prompt gently
+    if (finalCheckResult === 'MISMATCH' && !confirmedDespiteMismatch) {
+      setShowMismatchDialog(true);
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const result = await submitReport({
@@ -685,9 +786,17 @@ export const ReportProblemModal: React.FC = () => {
         urgent,
         anonymous,
         photoUrl,
+        imageHash: photoImageHash || undefined,
+        aiPhotoMatchResult: finalCheckResult || undefined,
+        aiPhotoFlagged: Boolean(finalCheckResult === 'MISMATCH' && confirmedDespiteMismatch),
+        aiPhotoRawResponse: photoCheckRawResponse || undefined,
       });
 
       setIsSubmitting(false);
+
+      if (result.rateLimited) {
+        return;
+      }
 
       // Clear saved draft upon successful report submission
       try {
@@ -699,7 +808,12 @@ export const ReportProblemModal: React.FC = () => {
       if (result.duplicateLinked) {
         // Alert handled via context duplicateAlert
       } else if (result.problemId) {
-        navigateTo('problem-detail', result.problemId);
+        setSubmittedPendingData({
+          problemId: result.problemId,
+          title: title.trim(),
+          category: isCustomCategory ? customCategoryText.trim() : category,
+          location: location.trim(),
+        });
       }
     } catch (err) {
       setIsSubmitting(false);
@@ -709,6 +823,79 @@ export const ReportProblemModal: React.FC = () => {
 
   return (
     <div className="pb-20 px-4 pt-3 max-w-xl mx-auto">
+      {/* Submitted Awaiting Approval Modal */}
+      {submittedPendingData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-[#FFFDF8] border-2 border-[#DEC0B8] rounded-2xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="w-14 h-14 rounded-full bg-[#FEF3C7] border-2 border-[#FCD34D] flex items-center justify-center mx-auto text-3xl shadow-xs">
+              ⏳
+            </div>
+
+            <div className="text-center space-y-1.5">
+              <h3 className="font-['Epilogue'] font-black text-lg text-[#1F1B17]">
+                Report Submitted for Review
+              </h3>
+              <p className="text-xs text-[#57423C] leading-relaxed">
+                Thank you for reporting! Your notice is now in the{' '}
+                <strong className="text-[#92400E]">Pending Review</strong> queue.
+              </p>
+            </div>
+
+            <div className="bg-[#FAF6ED] border border-[#DEC0B8] rounded-xl p-3.5 space-y-2 text-xs">
+              <div className="flex justify-between items-center text-[#7C695E]">
+                <span>Status:</span>
+                <span className="font-mono font-bold text-[#92400E] bg-[#FEF3C7] px-2 py-0.5 rounded border border-[#FCD34D]">
+                  ⏳ Awaiting Approval
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-[#7C695E]">
+                <span>Title:</span>
+                <span className="font-bold text-[#1F1B17] truncate max-w-[200px]">
+                  {submittedPendingData.title}
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-[#7C695E]">
+                <span>Category:</span>
+                <span className="font-medium text-[#1F1B17]">{submittedPendingData.category}</span>
+              </div>
+              <div className="flex justify-between items-center text-[#7C695E]">
+                <span>Location:</span>
+                <span className="font-medium text-[#1F1B17] truncate max-w-[200px]">
+                  {submittedPendingData.location}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-[#7C695E] bg-[#FFF8F5] p-3 rounded-lg border border-[#DEC0B8]/60 text-center leading-relaxed">
+              🛡️ To maintain an authentic, spam-free board, an NSS Coordinator will review this notice before it is published onto the Public Problem Wall. Upvoting and volunteer task assignments will activate once approved.
+            </p>
+
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setSubmittedPendingData(null);
+                  navigateTo('problem-wall');
+                }}
+                className="w-full py-2.5 rounded-xl cork-btn-primary text-xs font-['Epilogue'] font-bold cursor-pointer text-center"
+              >
+                Go to Problem Wall
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSubmittedPendingData(null);
+                  navigateTo('home');
+                }}
+                className="w-full py-2 rounded-xl bg-[#FAF6ED] hover:bg-[#F3EBE1] border border-[#DEC0B8] text-xs font-['Epilogue'] font-bold text-[#57423C] cursor-pointer text-center"
+              >
+                Return to Home
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Duplicate Detection Alert Modal / Banner */}
       {duplicateAlert && (
         <div className="mb-4 bg-[#FFDDAE]/90 border-2 border-[#7B5300] rounded-xl p-3.5 shadow-md animate-in fade-in">
@@ -1199,20 +1386,93 @@ export const ReportProblemModal: React.FC = () => {
               </div>
             ) : photoUrl ? (
               /* Display Captured/Selected Photo Preview */
-              <div className="relative rounded-xl overflow-hidden border-2 border-[#DEC0B8] h-40 bg-black/5 shadow-inner">
-                <img src={photoUrl} alt="Upload preview" className="w-full h-full object-cover" />
-                <div className="absolute bottom-2 left-2 px-2 py-1 rounded bg-black/65 text-white text-[10px] font-medium backdrop-blur-xs flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  Photo added ✓
+              <div>
+                <div className="relative rounded-xl overflow-hidden border-2 border-[#DEC0B8] h-44 bg-black/5 shadow-inner">
+                  <img src={photoUrl} alt="Upload preview" className="w-full h-full object-cover" />
+
+                  {/* AI Vision Checking Status Overlay */}
+                  {isCheckingPhoto && (
+                    <div className="absolute top-2 left-2 px-2.5 py-1 rounded-full bg-[#1B4B43]/90 text-white text-[11px] font-semibold backdrop-blur-xs flex items-center gap-1.5 shadow-md">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#93E2D5]" />
+                      <span>Checking photo...</span>
+                    </div>
+                  )}
+
+                  {!isCheckingPhoto && photoCheckResult === 'MATCH' && (
+                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-emerald-800/85 text-white text-[10px] font-medium backdrop-blur-xs flex items-center gap-1 shadow-xs">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-300" />
+                      <span>Photo verified</span>
+                    </div>
+                  )}
+
+                  <div className="absolute bottom-2 left-2 px-2 py-1 rounded bg-black/65 text-white text-[10px] font-medium backdrop-blur-xs flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                    Photo added ✓
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPhotoUrl('');
+                      setPhotoCheckResult(null);
+                      setPhotoCheckRawResponse(null);
+                      lastCheckedPhotoRef.current = null;
+                      setConfirmedDespiteMismatch(false);
+                      setShowMismatchDialog(false);
+                    }}
+                    aria-label="Remove photo"
+                    className="touch-target w-9 h-9 absolute top-2 right-2 rounded-full bg-black/70 text-white hover:bg-black flex items-center justify-center cursor-pointer shadow-md"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setPhotoUrl('')}
-                  aria-label="Remove photo"
-                  className="touch-target w-9 h-9 absolute top-2 right-2 rounded-full bg-black/70 text-white hover:bg-black flex items-center justify-center cursor-pointer shadow-md"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+
+                {/* Gentle Warning Box on AI Mismatch */}
+                {!isCheckingPhoto && photoCheckResult === 'MISMATCH' && (
+                  <div className="mt-2.5 p-3 rounded-xl bg-[#FFF5F5] border-2 border-[#FECACA] shadow-xs animate-in fade-in">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="w-5 h-5 text-[#DC2626] shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="font-['Epilogue'] font-bold text-xs text-[#991B1B]">
+                          Photo might not match category
+                        </h4>
+                        <p className="text-xs text-[#7F1D1D] mt-1 leading-relaxed">
+                          This photo doesn't look like it matches <span className="font-bold">'{isCustomCategory ? customCategoryText.trim() : category || 'the category'}'</span>. Please double check you've uploaded the right photo before submitting.
+                        </p>
+                        <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPhotoUrl('');
+                              setPhotoCheckResult(null);
+                              setPhotoCheckRawResponse(null);
+                              lastCheckedPhotoRef.current = null;
+                              setConfirmedDespiteMismatch(false);
+                              setShowMismatchDialog(false);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-white border border-[#FECACA] text-[#991B1B] text-xs font-['Epilogue'] font-bold hover:bg-[#FEF2F2] cursor-pointer"
+                          >
+                            Change Photo
+                          </button>
+                          {!confirmedDespiteMismatch ? (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmedDespiteMismatch(true)}
+                              className="px-3 py-1.5 rounded-lg bg-[#DC2626] text-white text-xs font-['Epilogue'] font-bold hover:bg-[#B91C1C] cursor-pointer shadow-xs"
+                            >
+                              I'm sure, submit anyway
+                            </button>
+                          ) : (
+                            <span className="text-[11px] font-semibold text-[#15803D] flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Confirmed to submit anyway (coordinator will review)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               /* Photo Input Options: Camera / File Upload / Sample Presets */
@@ -1264,9 +1524,12 @@ export const ReportProblemModal: React.FC = () => {
                         type="button"
                         onClick={() => {
                           setPhotoUrl(p.url);
+                          setPhotoValidationError(null);
+                          computeImageHashFromUrl(p.url).then(setPhotoImageHash).catch(() => {});
                           if (validationErrors.photo) {
                             setValidationErrors((prev) => ({ ...prev, photo: '' }));
                           }
+                          runAiPhotoCheck(p.url);
                         }}
                         className="touch-target min-h-[36px] text-[10px] font-semibold px-2.5 py-1 rounded-md bg-[#FFFDF8] border border-[#DEC0B8] text-[#57423C] hover:border-[#A03818] hover:text-[#A03818] active:bg-[#FFDBD1]/50 cursor-pointer"
                       >
@@ -1278,7 +1541,14 @@ export const ReportProblemModal: React.FC = () => {
               </div>
             )}
 
-            {formSubmitted && validationErrors.photo && !photoUrl && (
+            {photoValidationError && (
+              <p className="text-[11px] text-[#A03818] font-semibold mt-1.5 flex items-center gap-1">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{photoValidationError}</span>
+              </p>
+            )}
+
+            {formSubmitted && validationErrors.photo && !photoUrl && !photoValidationError && (
               <p className="text-[11px] text-[#A03818] font-semibold mt-1.5 flex items-center gap-1">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                 <span>{validationErrors.photo}</span>
@@ -1635,16 +1905,115 @@ export const ReportProblemModal: React.FC = () => {
 
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="touch-target flex-1 min-h-[48px] py-2.5 px-4 rounded-xl font-['Epilogue'] font-extrabold text-sm cork-btn-primary flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                disabled={isSubmitting || isCheckingPhoto}
+                className="touch-target flex-1 min-h-[48px] py-2.5 px-4 rounded-xl font-['Epilogue'] font-extrabold text-sm cork-btn-primary flex items-center justify-center gap-2 shadow-sm cursor-pointer disabled:opacity-75"
               >
-                <span>{isSubmitting ? 'Posting...' : 'Post Problem'}</span>
-                <ArrowRight className="w-4 h-4" />
+                {isCheckingPhoto ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-[#93E2D5]" />
+                    <span>Checking photo...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{isSubmitting ? 'Posting...' : 'Post Problem'}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </div>
           </div>
         </form>
       </div>
+
+      {/* AI Photo Mismatch Warning Dialog */}
+      {showMismatchDialog && (
+        <div className="fixed inset-0 z-50 bg-[#1F1B17]/65 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-[#FFFDF8] border-2 border-[#A03818] rounded-2xl max-w-md w-full p-5 shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-start gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full bg-[#FFDBD1] flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-[#A03818]" />
+              </div>
+              <div>
+                <h3 className="font-['Epilogue'] font-extrabold text-base text-[#1F1B17]">
+                  Please Double-Check Your Photo
+                </h3>
+                <p className="text-xs text-[#57423C] mt-1.5 leading-relaxed">
+                  This photo doesn't look like it matches <span className="font-bold text-[#A03818]">'{isCustomCategory ? customCategoryText.trim() : category || 'the category'}'</span>. Please double check you've uploaded the right photo before submitting.
+                </p>
+                <p className="text-[11px] text-[#7C695E] mt-2 bg-[#FAF6ED] p-2.5 rounded-lg border border-[#DEC0B8]">
+                  ℹ️ If you confirm and submit anyway, your report will be marked for closer coordinator scrutiny in the Moderation queue rather than being rejected.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 pt-3 border-t border-[#DEC0B8] flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMismatchDialog(false);
+                  setPhotoUrl('');
+                  setPhotoCheckResult(null);
+                  setPhotoCheckRawResponse(null);
+                  lastCheckedPhotoRef.current = null;
+                  setConfirmedDespiteMismatch(false);
+                }}
+                className="touch-target min-h-[42px] px-3.5 py-2 rounded-xl border border-[#DEC0B8] bg-[#FAF6ED] text-xs font-['Epilogue'] font-bold text-[#57423C] hover:bg-[#F1E6E0] cursor-pointer"
+              >
+                Change Photo
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setShowMismatchDialog(false);
+                  setConfirmedDespiteMismatch(true);
+                  setIsSubmitting(true);
+                  try {
+                    const effectiveCategory = isCustomCategory
+                      ? customCategoryText.trim()
+                      : category;
+
+                    const result = await submitReport({
+                      title: title.trim(),
+                      description: description.trim(),
+                      category: effectiveCategory || 'General',
+                      location: location.trim(),
+                      landmark: landmark.trim(),
+                      coordinates: detectedCoords || undefined,
+                      urgent,
+                      anonymous,
+                      photoUrl,
+                      imageHash: photoImageHash || undefined,
+                      aiPhotoMatchResult: 'MISMATCH',
+                      aiPhotoFlagged: true,
+                      aiPhotoRawResponse: photoCheckRawResponse || 'MISMATCH (User confirmed submit anyway)',
+                    });
+
+                    setIsSubmitting(false);
+
+                    if (result.rateLimited) return;
+
+                    try {
+                      localStorage.removeItem(DRAFT_STORAGE_KEY);
+                      setDraftSavedAt(null);
+                      setDraftRestored(false);
+                    } catch {}
+
+                    if (!result.duplicateLinked && result.problemId) {
+                      navigateTo('problem-detail', result.problemId);
+                    }
+                  } catch {
+                    setIsSubmitting(false);
+                    showToast('Submission failed. Please try again.');
+                  }
+                }}
+                className="touch-target min-h-[42px] px-4 py-2 rounded-xl bg-[#A03818] text-white text-xs font-['Epilogue'] font-extrabold hover:bg-[#842504] shadow-xs cursor-pointer"
+              >
+                Confirm and Submit Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Discard Draft Confirmation Dialog */}
       {showDiscardConfirm && (

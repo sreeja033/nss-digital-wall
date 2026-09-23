@@ -40,6 +40,11 @@ export const AdminHomeView: React.FC = () => {
     }
   }, [adminData?.broadcastNote]);
 
+  const pendingReviewTasks = problems.filter(
+    (p) =>
+      (!p.assignedLead && p.status !== 'IN_PROGRESS' && p.status !== 'SOLVED') &&
+      (p.status === 'PENDING_REVIEW' || p.moderationStatus === 'PENDING' || !p.isApproved || p.reflaggedByCommunity)
+  );
   const unassignedTasks = problems.filter((p) => p.status === 'REPORTED' && !p.assignedLead);
   const activeTasks = problems.filter((p) => p.status === 'IN_PROGRESS');
   const solvedTasks = problems.filter((p) => p.status === 'SOLVED');
@@ -128,6 +133,30 @@ export const AdminHomeView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Pending Moderation Review Callout */}
+      {pendingReviewTasks.length > 0 && (
+        <div className="bg-[#FFFBEB] border-2 border-[#FDE68A] rounded-xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="w-5 h-5 text-[#D97706] shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-['Epilogue'] font-bold text-sm text-[#92400E]">
+                {pendingReviewTasks.length} Citizen Report{pendingReviewTasks.length > 1 ? 's' : ''} Pending Moderation Gate
+              </h4>
+              <p className="text-xs text-[#78350F] mt-0.5">
+                New submissions held in review queue before becoming publicly visible on the Problem Wall.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => handleOpenAdminSection('moderation')}
+            className="px-3.5 py-2 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-['Epilogue'] font-bold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer shrink-0"
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>Moderate Queue</span>
+          </button>
+        </div>
+      )}
 
       {/* Urgent Dispatch Callout */}
       {unassignedTasks.length > 0 && (

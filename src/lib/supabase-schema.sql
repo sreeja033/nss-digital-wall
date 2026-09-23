@@ -17,7 +17,7 @@ END $$;
 
 DO $$ BEGIN
   CREATE TYPE problem_status AS ENUM (
-    'reported', 'in_progress', 'solved', 'rejected'
+    'pending_review', 'reported', 'in_progress', 'solved', 'rejected'
   );
 EXCEPTION
   WHEN duplicate_object THEN null;
@@ -80,11 +80,15 @@ CREATE TABLE IF NOT EXISTS public.problems (
   description TEXT NOT NULL,
   category problem_category NOT NULL,
   photo_url TEXT,
+  image_hash TEXT,
+  possible_reused_photo BOOLEAN NOT NULL DEFAULT FALSE,
+  reflagged_by_community BOOLEAN NOT NULL DEFAULT FALSE,
+  flag_count INTEGER NOT NULL DEFAULT 0,
   location_text TEXT NOT NULL,
   landmark TEXT,
   lat NUMERIC,
   lng NUMERIC,
-  status problem_status NOT NULL DEFAULT 'reported',
+  status problem_status NOT NULL DEFAULT 'pending_review',
   is_urgent BOOLEAN NOT NULL DEFAULT FALSE,
   upvote_count INTEGER NOT NULL DEFAULT 0,
   linked_reports_count INTEGER NOT NULL DEFAULT 0,
@@ -92,6 +96,20 @@ CREATE TABLE IF NOT EXISTS public.problems (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at TIMESTAMPTZ
 );
+
+-- Community Flags on Problems
+CREATE TABLE IF NOT EXISTS public.problem_flags (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  problem_id UUID NOT NULL REFERENCES public.problems(id) ON DELETE CASCADE,
+  session_token TEXT,
+  community_user_id UUID REFERENCES public.community_users(id) ON DELETE CASCADE,
+  reason TEXT DEFAULT 'Flagged by resident',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT flag_user_or_token CHECK (community_user_id IS NOT NULL OR session_token IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS flag_token_unique ON public.problem_flags(problem_id, session_token) WHERE session_token IS NOT NULL AND community_user_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS flag_user_unique ON public.problem_flags(problem_id, community_user_id) WHERE community_user_id IS NOT NULL;
 
 -- Teams (Assignment of Problems to Volunteers)
 CREATE TABLE IF NOT EXISTS public.teams (
@@ -146,6 +164,21 @@ CREATE TABLE IF NOT EXISTS public.adoptions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS adoption_user_unique ON public.adoptions(problem_id, community_user_id) WHERE community_user_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS adoption_token_unique ON public.adoptions(problem_id, session_token) WHERE session_token IS NOT NULL AND community_user_id IS NULL;
+
+-- Comments / Neighbor Notes
+CREATE TABLE IF NOT EXISTS public.comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  problem_id UUID NOT NULL REFERENCES public.problems(id) ON DELETE CASCADE,
+  author_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  badge TEXT,
+  bg_color TEXT,
+  session_token TEXT,
+  community_user_id UUID REFERENCES public.community_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_comments_problem_id ON public.comments(problem_id);
 
 -- ==============================================================================
 -- 4. Required Performance Indexes
@@ -294,10 +327,20 @@ RETURNS BOOLEAN AS $$
 $$ LANGUAGE sql SECURITY DEFINER;
 
 -- --- PROBLEMS POLICIES ---
--- Public SELECT (anonymous community corkboard)
+-- Public SELECT: only returns problems where status is NOT pending_review and NOT rejected
 DROP POLICY IF EXISTS "Problems are viewable by everyone" ON public.problems;
-CREATE POLICY "Problems are viewable by everyone" ON public.problems
-  FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public can only view approved problems" ON public.problems;
+CREATE POLICY "Public can only view approved problems" ON public.problems
+  FOR SELECT USING (
+    status != 'pending_review' AND status != 'rejected'
+  );
+
+-- Coordinator SELECT: coordinators can view all problems including pending_review and rejected
+DROP POLICY IF EXISTS "Coordinators can view all problems" ON public.problems;
+CREATE POLICY "Coordinators can view all problems" ON public.problems
+  FOR SELECT USING (
+    public.is_coordinator(auth.uid())
+  );
 
 -- Public INSERT (anonymous and authenticated community reporting)
 DROP POLICY IF EXISTS "Anyone can report a problem" ON public.problems;
@@ -311,17 +354,47 @@ CREATE POLICY "Problems updateable by assigned volunteers or coordinators" ON pu
     public.is_coordinator(auth.uid()) OR public.is_assigned_volunteer(auth.uid(), id)
   );
 
+-- --- COMMUNITY FLAGS POLICIES ---
+ALTER TABLE public.problem_flags ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can flag a problem" ON public.problem_flags;
+CREATE POLICY "Anyone can flag a problem" ON public.problem_flags
+  FOR INSERT WITH CHECK (
+    (community_user_id IS NOT NULL AND community_user_id = auth.uid()) OR (session_token IS NOT NULL)
+  );
+
+DROP POLICY IF EXISTS "Flags viewable by coordinators" ON public.problem_flags;
+CREATE POLICY "Flags viewable by coordinators" ON public.problem_flags
+  FOR SELECT USING (
+    public.is_coordinator(auth.uid()) OR (community_user_id IS NOT NULL AND community_user_id = auth.uid())
+  );
+
 -- --- ACTIONS POLICIES ---
--- Public SELECT
+-- Public SELECT: view actions for approved problems or if coordinator
 DROP POLICY IF EXISTS "Actions are viewable by everyone" ON public.actions;
 CREATE POLICY "Actions are viewable by everyone" ON public.actions
-  FOR SELECT USING (true);
+  FOR SELECT USING (
+    public.is_coordinator(auth.uid()) OR EXISTS (
+      SELECT 1 FROM public.problems
+      WHERE problems.id = actions.problem_id
+        AND problems.status != 'pending_review'
+        AND problems.status != 'rejected'
+    )
+  );
 
--- INSERT restricted to volunteers on that problem's assigned team or coordinators
+-- INSERT restricted to coordinators, or assigned volunteers on approved problems
 DROP POLICY IF EXISTS "Actions insertable by assigned team members or coordinators" ON public.actions;
 CREATE POLICY "Actions insertable by assigned team members or coordinators" ON public.actions
   FOR INSERT WITH CHECK (
-    public.is_coordinator(auth.uid()) OR public.is_assigned_volunteer(auth.uid(), problem_id)
+    public.is_coordinator(auth.uid()) OR (
+      public.is_assigned_volunteer(auth.uid(), problem_id)
+      AND EXISTS (
+        SELECT 1 FROM public.problems
+        WHERE problems.id = actions.problem_id
+          AND problems.status != 'pending_review'
+          AND problems.status != 'rejected'
+      )
+    )
   );
 
 -- --- TEAMS & TEAM MEMBERS POLICIES ---
@@ -334,7 +407,7 @@ DROP POLICY IF EXISTS "Team members are viewable by everyone" ON public.team_mem
 CREATE POLICY "Team members are viewable by everyone" ON public.team_members
   FOR SELECT USING (true);
 
--- INSERT/UPDATE restricted to coordinators, or volunteers self-claiming an unassigned problem
+-- INSERT/UPDATE restricted to coordinators, or volunteers self-claiming an approved unassigned problem
 DROP POLICY IF EXISTS "Teams insertable by coordinators or self-claiming volunteers" ON public.teams;
 CREATE POLICY "Teams insertable by coordinators or self-claiming volunteers" ON public.teams
   FOR INSERT WITH CHECK (
@@ -342,6 +415,12 @@ CREATE POLICY "Teams insertable by coordinators or self-claiming volunteers" ON 
     OR (
       EXISTS (SELECT 1 FROM public.volunteers WHERE id = auth.uid() AND status = 'active')
       AND NOT EXISTS (SELECT 1 FROM public.teams WHERE problem_id = teams.problem_id)
+      AND EXISTS (
+        SELECT 1 FROM public.problems
+        WHERE problems.id = teams.problem_id
+          AND problems.status != 'pending_review'
+          AND problems.status != 'rejected'
+      )
     )
   );
 
@@ -388,7 +467,16 @@ DROP POLICY IF EXISTS "Upvotes viewable by everyone" ON public.upvotes;
 CREATE POLICY "Upvotes viewable by everyone" ON public.upvotes FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Anyone can add an upvote" ON public.upvotes;
-CREATE POLICY "Anyone can add an upvote" ON public.upvotes FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Upvotes only allowed on approved problems" ON public.upvotes;
+CREATE POLICY "Upvotes only allowed on approved problems" ON public.upvotes
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.problems
+      WHERE problems.id = upvotes.problem_id
+        AND problems.status != 'pending_review'
+        AND problems.status != 'rejected'
+    )
+  );
 
 DROP POLICY IF EXISTS "Upvotes deletable by owner" ON public.upvotes;
 CREATE POLICY "Upvotes deletable by owner" ON public.upvotes FOR DELETE USING (
@@ -399,12 +487,46 @@ DROP POLICY IF EXISTS "Adoptions viewable by everyone" ON public.adoptions;
 CREATE POLICY "Adoptions viewable by everyone" ON public.adoptions FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Anyone can adopt a problem" ON public.adoptions;
-CREATE POLICY "Anyone can adopt a problem" ON public.adoptions FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Adoptions only allowed on approved problems" ON public.adoptions;
+CREATE POLICY "Adoptions only allowed on approved problems" ON public.adoptions
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.problems
+      WHERE problems.id = adoptions.problem_id
+        AND problems.status != 'pending_review'
+        AND problems.status != 'rejected'
+    )
+  );
 
 DROP POLICY IF EXISTS "Adoptions deletable by owner" ON public.adoptions;
 CREATE POLICY "Adoptions deletable by owner" ON public.adoptions FOR DELETE USING (
   (community_user_id IS NOT NULL AND community_user_id = auth.uid()) OR (session_token IS NOT NULL)
 );
+
+-- --- COMMENTS POLICIES ---
+ALTER TABLE public.comments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Comments viewable on approved problems" ON public.comments;
+CREATE POLICY "Comments viewable on approved problems" ON public.comments
+  FOR SELECT USING (
+    public.is_coordinator(auth.uid()) OR EXISTS (
+      SELECT 1 FROM public.problems
+      WHERE problems.id = comments.problem_id
+        AND problems.status != 'pending_review'
+        AND problems.status != 'rejected'
+    )
+  );
+
+DROP POLICY IF EXISTS "Comments only allowed on approved problems" ON public.comments;
+CREATE POLICY "Comments only allowed on approved problems" ON public.comments
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.problems
+      WHERE problems.id = comments.problem_id
+        AND problems.status != 'pending_review'
+        AND problems.status != 'rejected'
+    )
+  );
 
 -- ==============================================================================
 -- 7. Storage Bucket Setup (report-photos)

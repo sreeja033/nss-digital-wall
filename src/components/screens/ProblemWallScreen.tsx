@@ -17,7 +17,7 @@ import {
   Eye,
   Info,
 } from 'lucide-react';
-import { ProblemCategory, ProblemStatus } from '../../types';
+import { Problem, ProblemCategory, ProblemStatus } from '../../types';
 
 export const ProblemWallScreen: React.FC = () => {
   const {
@@ -37,22 +37,40 @@ export const ProblemWallScreen: React.FC = () => {
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [selectedMapProblemId, setSelectedMapProblemId] = useState<string | null>(null);
 
-  // Filter problems: only exclude explicitly rejected notices
+  const isMyReport = (p: Problem) => {
+    if (myReportedProblemIds && myReportedProblemIds.includes(p.id)) return true;
+    if (!currentCommunityMember?.id) return false;
+    return (
+      p.reportedByUserId === currentCommunityMember.id ||
+      (currentCommunityMember.fullName &&
+        p.reportedByAuthor &&
+        p.reportedByAuthor.toLowerCase() === currentCommunityMember.fullName.toLowerCase())
+    );
+  };
+
+  const publicProblems = problems.filter((p) => {
+    if (p.moderationStatus === 'REJECTED' || p.status === 'REJECTED') return false;
+    if (p.status === 'PENDING_REVIEW' || p.moderationStatus === 'PENDING' || !p.isApproved) return false;
+    return true;
+  });
+
+  // Filter problems: exclude pending_review from public wall unless explicitly on the 'MY_REPORTS' tab
   const filteredProblems = problems.filter((p) => {
-    if (p.moderationStatus === 'REJECTED') {
+    if (p.moderationStatus === 'REJECTED' || p.status === 'REJECTED') {
       return false;
+    }
+
+    // STRICT MODERATION GATE:
+    // If report is unapproved or pending review, it is NEVER shown on the public wall (ALL, REPORTED, etc.)
+    if (p.status === 'PENDING_REVIEW' || p.moderationStatus === 'PENDING' || !p.isApproved) {
+      if (statusFilter !== 'MY_REPORTS') {
+        return false;
+      }
     }
 
     // My reports filter
     if (statusFilter === 'MY_REPORTS') {
-      if (myReportedProblemIds && myReportedProblemIds.includes(p.id)) return true;
-      if (!currentCommunityMember?.id) return false;
-      return (
-        p.reportedByUserId === currentCommunityMember.id ||
-        (currentCommunityMember.fullName &&
-          p.reportedByAuthor &&
-          p.reportedByAuthor.toLowerCase() === currentCommunityMember.fullName.toLowerCase())
-      );
+      return isMyReport(p);
     }
 
     // Search query
@@ -173,7 +191,7 @@ export const ProblemWallScreen: React.FC = () => {
               : 'bg-[#FFFDF8] border border-[#DEC0B8] text-[#57423C]'
           }`}
         >
-          All ({problems.length})
+          All ({publicProblems.length})
         </button>
 
         <button
@@ -221,7 +239,7 @@ export const ProblemWallScreen: React.FC = () => {
           Solved ✓
         </button>
 
-        {isCommunityLoggedIn && (
+        {(isCommunityLoggedIn || (myReportedProblemIds && myReportedProblemIds.length > 0)) && (
           <button
             onClick={() => setStatusFilter(statusFilter === 'MY_REPORTS' ? 'ALL' : 'MY_REPORTS')}
             className={`px-2.5 py-1 rounded-lg text-xs font-['Epilogue'] font-bold uppercase transition-all whitespace-nowrap cursor-pointer ${
@@ -230,7 +248,7 @@ export const ProblemWallScreen: React.FC = () => {
                 : 'bg-[#FCF2EB] border border-[#DEC0B8] text-[#A03818]'
             }`}
           >
-            My Reports ({problems.filter((p) => (myReportedProblemIds && myReportedProblemIds.includes(p.id)) || p.reportedByUserId === currentCommunityMember?.id).length})
+            My Reports ({problems.filter((p) => isMyReport(p)).length})
           </button>
         )}
       </div>

@@ -46,8 +46,9 @@ export const CommunityHomeView: React.FC = () => {
   const [isClearingSample, setIsClearingSample] = useState(false);
 
   const approvedProblems = problems.filter((p) => {
-    // Show all reports on bulletin unless explicitly rejected
-    if (p.moderationStatus === 'REJECTED') return false;
+    // Hide pending_review and unapproved reports from public bulletin until approved by a coordinator
+    if (p.status === 'PENDING_REVIEW' || p.moderationStatus === 'PENDING' || !p.isApproved) return false;
+    if (p.moderationStatus === 'REJECTED' || p.status === 'REJECTED') return false;
     return true;
   });
   const reportedAndInProgress = approvedProblems.filter((p) => p.status !== 'SOLVED');

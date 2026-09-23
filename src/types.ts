@@ -10,7 +10,7 @@ export type ProblemCategory =
   | 'Electrical'
   | (string & {});
 
-export type ProblemStatus = 'REPORTED' | 'IN_PROGRESS' | 'SOLVED';
+export type ProblemStatus = 'PENDING_REVIEW' | 'REPORTED' | 'IN_PROGRESS' | 'SOLVED';
 
 export interface ProgressUpdate {
   id: string;
@@ -65,8 +65,17 @@ export interface Problem {
   isProblemOfTheMonth?: boolean;
   moderationStatus?: 'PENDING' | 'APPROVED' | 'REJECTED';
   isApproved?: boolean;
+  imageHash?: string;
+  possibleReusedPhoto?: boolean;
+  reflaggedByCommunity?: boolean;
+  flagCount?: number;
+  flaggedSessionTokens?: string[];
+  flaggedUserIds?: string[];
   reportedByUserId?: string | null;
   reportedByAuthor?: string;
+  aiPhotoMatchResult?: 'MATCH' | 'MISMATCH' | 'UNCLEAR';
+  aiPhotoFlagged?: boolean;
+  aiPhotoRawResponse?: string;
 }
 
 export interface VolunteerRosterMember {

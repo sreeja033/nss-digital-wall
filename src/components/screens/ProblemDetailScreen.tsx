@@ -20,6 +20,7 @@ import {
   UserCheck,
   Calendar,
   Wrench,
+  Flag,
 } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/dateUtils';
 
@@ -28,6 +29,8 @@ export const ProblemDetailScreen: React.FC = () => {
     selectedProblem,
     toggleUpvote,
     toggleAdopt,
+    flagProblem,
+    currentCommunityMember,
     upvotedProblemIds,
     adoptedProblemIds,
     addComment,
@@ -71,6 +74,11 @@ export const ProblemDetailScreen: React.FC = () => {
     return 'rust';
   };
 
+  const isPendingReview =
+    selectedProblem.status === 'PENDING_REVIEW' ||
+    selectedProblem.moderationStatus === 'PENDING' ||
+    !selectedProblem.isApproved;
+
   return (
     <div className="pb-24 px-4 pt-3 max-w-xl mx-auto space-y-4">
       {/* Main Notice Sheet */}
@@ -86,6 +94,21 @@ export const ProblemDetailScreen: React.FC = () => {
         <div className="absolute -top-2.5 right-4 rotate-6 z-10">
           <WashiTape color="mint" width="w-16" />
         </div>
+
+        {/* Pending Review Notice Banner */}
+        {isPendingReview && (
+          <div className="mb-4 mt-2 p-3.5 bg-[#FFFBEB] border-2 border-[#FCD34D] rounded-xl flex items-start gap-3">
+            <span className="text-xl shrink-0">⏳</span>
+            <div className="space-y-1">
+              <h4 className="font-['Epilogue'] font-black text-xs text-[#92400E] uppercase tracking-wide">
+                Under Moderation Review (Pending Approval)
+              </h4>
+              <p className="text-xs text-[#B45309] leading-relaxed">
+                This report is awaiting coordinator approval before appearing publicly on the problem wall. Upvoting, watching, and progress updates are disabled during review.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Rubber stamp, Origin Tag & Category */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 sm:pt-2.5 mb-3">
@@ -120,6 +143,32 @@ export const ProblemDetailScreen: React.FC = () => {
             <span className="text-xs font-['Epilogue'] font-bold px-2.5 py-1 rounded-full bg-[#FCF2EB] text-[#57423C] border border-[#DEC0B8]">
               {selectedProblem.category}
             </span>
+            {userRole === 'ADMIN' && selectedProblem.aiPhotoFlagged && (
+              <span
+                className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-full bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA] flex items-center gap-1"
+                title={selectedProblem.aiPhotoRawResponse || 'AI flagged: photo may not match category'}
+              >
+                <span>⚠️</span>
+                <span>AI flagged: photo may not match category</span>
+              </span>
+            )}
+            {userRole === 'ADMIN' && !selectedProblem.aiPhotoFlagged && selectedProblem.aiPhotoMatchResult === 'MISMATCH' && (
+              <span
+                className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-full bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA] flex items-center gap-1"
+                title={selectedProblem.aiPhotoRawResponse || 'AI: possible mismatch'}
+              >
+                <span>⚠️</span>
+                <span>AI: possible mismatch</span>
+              </span>
+            )}
+            {userRole === 'ADMIN' && selectedProblem.aiPhotoMatchResult === 'UNCLEAR' && (
+              <span
+                className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-full bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB]"
+                title={selectedProblem.aiPhotoRawResponse || 'AI check was inconclusive'}
+              >
+                AI: unclear match
+              </span>
+            )}
           </div>
         </div>
 
@@ -254,36 +303,72 @@ export const ProblemDetailScreen: React.FC = () => {
           {/* Upvote Button */}
           <button
             onClick={() => toggleUpvote(selectedProblem.id)}
-            className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-['Epilogue'] font-bold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-              isUpvoted
-                ? 'bg-[#A03818] text-white border-[#842504] shadow-sm'
-                : 'bg-[#FFF8F5] text-[#57423C] border-[#DEC0B8] hover:bg-[#FFDBD1]/50'
+            disabled={isPendingReview}
+            className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-['Epilogue'] font-bold flex items-center justify-center gap-2 transition-all ${
+              isPendingReview
+                ? 'bg-[#F3F4F6] text-[#9CA3AF] border-[#E5E7EB] cursor-not-allowed opacity-75'
+                : isUpvoted
+                ? 'bg-[#A03818] text-white border-[#842504] shadow-sm cursor-pointer'
+                : 'bg-[#FFF8F5] text-[#57423C] border-[#DEC0B8] hover:bg-[#FFDBD1]/50 cursor-pointer'
             }`}
+            title={isPendingReview ? 'Upvoting is locked while awaiting coordinator review' : 'I Agree'}
           >
-            <ThumbsUp className={`w-4 h-4 ${isUpvoted ? 'fill-white' : ''}`} />
-            <span>I Agree ({selectedProblem.upvotes})</span>
+            <ThumbsUp className={`w-4 h-4 ${isUpvoted && !isPendingReview ? 'fill-white' : ''}`} />
+            <span>{isPendingReview ? 'Upvotes Locked (Pending Review)' : `I Agree (${selectedProblem.upvotes})`}</span>
           </button>
 
           {/* "Watch this" Follow Button */}
           <button
             onClick={() => toggleAdopt(selectedProblem.id)}
-            className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-['Epilogue'] font-bold flex items-center justify-center gap-2 cursor-pointer transition-all ${
-              isAdopted
-                ? 'bg-[#FFDBD1] text-[#A03818] border-[#A03818] shadow-sm'
-                : 'bg-[#FFF8F5] text-[#57423C] border-[#DEC0B8] hover:bg-[#FFDBD1]/40'
+            disabled={isPendingReview}
+            className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-['Epilogue'] font-bold flex items-center justify-center gap-2 transition-all ${
+              isPendingReview
+                ? 'bg-[#F3F4F6] text-[#9CA3AF] border-[#E5E7EB] cursor-not-allowed opacity-75'
+                : isAdopted
+                ? 'bg-[#FFDBD1] text-[#A03818] border-[#A03818] shadow-sm cursor-pointer'
+                : 'bg-[#FFF8F5] text-[#57423C] border-[#DEC0B8] hover:bg-[#FFDBD1]/40 cursor-pointer'
             }`}
-            title="Watch this problem to get updates"
+            title={isPendingReview ? 'Watching is locked while awaiting coordinator review' : 'Watch this problem to get updates'}
           >
             <Eye className="w-4 h-4 text-[#A03818]" />
             <span>
-              {isAdopted ? 'Watching ✓' : 'Watch'} ({selectedProblem.adoptersCount})
+              {isPendingReview ? 'Watch Locked' : isAdopted ? 'Watching ✓' : 'Watch'} ({selectedProblem.adoptersCount})
             </span>
           </button>
         </div>
 
-        <p className="text-[11px] text-[#8C7A70] text-center mt-2">
-          Watched by {selectedProblem.adoptersCount} neighbors. No login needed.
-        </p>
+        {(() => {
+          const sessionToken = typeof window !== 'undefined' ? (localStorage.getItem('nss_session_token') || 'anon-session') : 'anon-session';
+          const hasFlagged = Boolean(
+            (currentCommunityMember?.id && selectedProblem.flaggedUserIds?.includes(currentCommunityMember.id)) ||
+            (selectedProblem.flaggedSessionTokens?.includes(sessionToken))
+          );
+
+          return (
+            <div className="flex items-center justify-between text-[11px] text-[#8C7A70] mt-2.5 px-1">
+              <span>Watched by {selectedProblem.adoptersCount} neighbors.</span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (hasFlagged) return;
+                  if (window.confirm('Flag this report for spam, abuse, or inaccurate details? A coordinator will review it.')) {
+                    flagProblem(selectedProblem.id, 'Flagged by resident in detail view');
+                  }
+                }}
+                disabled={hasFlagged}
+                className={`flex items-center gap-1 transition-colors cursor-pointer ${
+                  hasFlagged
+                    ? 'text-gray-400 cursor-not-allowed'
+                    : 'text-[#8C7A70] hover:text-[#DC2626]'
+                }`}
+                title={hasFlagged ? 'You have already flagged this notice' : 'Flag this report for coordinator moderation'}
+              >
+                <Flag className="w-3 h-3" />
+                <span>{hasFlagged ? 'Report Flagged' : 'Flag this report'}</span>
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Volunteer / Admin Status Card */}
@@ -476,17 +561,28 @@ export const ProblemDetailScreen: React.FC = () => {
             rows={2}
             value={commentText || ''}
             onChange={(e) => setCommentText(e.target.value)}
-            placeholder="Write an update, note, or thank-you..."
-            className="w-full px-3 py-2 text-xs rounded-lg bg-[#FAF6ED] border border-[#DEC0B8] text-[#1F1B17] placeholder:text-[#9E8B80] focus:outline-none focus:border-[#A03818]"
+            disabled={isPendingReview}
+            placeholder={
+              isPendingReview
+                ? 'Discussion is disabled while awaiting coordinator approval...'
+                : 'Write an update, note, or thank-you...'
+            }
+            className={`w-full px-3 py-2 text-xs rounded-lg border border-[#DEC0B8] text-[#1F1B17] placeholder:text-[#9E8B80] focus:outline-none focus:border-[#A03818] ${
+              isPendingReview ? 'bg-gray-100 cursor-not-allowed opacity-75' : 'bg-[#FAF6ED]'
+            }`}
           />
 
           <div className="flex justify-between items-center pt-1">
             <span className="text-[10px] text-[#8C7A70]">
-              {isVolunteerLoggedIn ? 'Posting as Volunteer' : 'Anonymous note'}
+              {isPendingReview
+                ? 'Notes unlock upon report approval'
+                : isVolunteerLoggedIn
+                ? 'Posting as Volunteer'
+                : 'Anonymous note'}
             </span>
             <button
               type="submit"
-              disabled={!commentText.trim()}
+              disabled={isPendingReview || !commentText.trim()}
               className="px-3 py-1.5 rounded-lg cork-btn-primary text-xs font-['Epilogue'] font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
             >
               <span>Post Note</span>

@@ -72,7 +72,7 @@ export const AdminScreen: React.FC = () => {
     }
   }, [adminData?.broadcastNote]);
   const [moderationSearch, setModerationSearch] = useState('');
-  const [moderationFilter, setModerationFilter] = useState<'PENDING' | 'ALL' | 'URGENT'>('PENDING');
+  const [moderationFilter, setModerationFilter] = useState<'PENDING' | 'ALL' | 'URGENT' | 'AI_FLAGGED'>('PENDING');
 
   // Search and Filter states
   const [volunteerSearch, setVolunteerSearch] = useState('');
@@ -328,8 +328,10 @@ export const AdminScreen: React.FC = () => {
       const isAssigned = Boolean(p.assignedLead) || p.status === 'IN_PROGRESS' || p.status === 'SOLVED';
       if (isAssigned) return false;
 
-      if (moderationFilter === 'PENDING' && p.moderationStatus !== 'PENDING' && p.isApproved) return false;
+      const isPendingGate = p.status === 'PENDING_REVIEW' || p.moderationStatus === 'PENDING' || !p.isApproved || p.reflaggedByCommunity;
+      if (moderationFilter === 'PENDING' && !isPendingGate) return false;
       if (moderationFilter === 'URGENT' && !p.urgent) return false;
+      if (moderationFilter === 'AI_FLAGGED' && !(p.aiPhotoFlagged || p.aiPhotoMatchResult === 'MISMATCH')) return false;
       if (moderationSearch.trim()) {
         const q = moderationSearch.toLowerCase();
         return (
@@ -339,6 +341,13 @@ export const AdminScreen: React.FC = () => {
         );
       }
       return true;
+    }).sort((a, b) => {
+      // Prioritize reports with AI mismatch or warning confirmed so coordinators can inspect them first
+      const aMismatch = Boolean(a.aiPhotoFlagged || a.aiPhotoMatchResult === 'MISMATCH');
+      const bMismatch = Boolean(b.aiPhotoFlagged || b.aiPhotoMatchResult === 'MISMATCH');
+      if (aMismatch && !bMismatch) return -1;
+      if (!aMismatch && bMismatch) return 1;
+      return 0;
     });
   }, [problems, moderationFilter, moderationSearch]);
 
@@ -986,7 +995,7 @@ export const AdminScreen: React.FC = () => {
                     : 'bg-white text-[#57423C] border-[#DEC0B8]'
                 }`}
               >
-                Pending Review ({problems.filter((p) => (!p.assignedLead && p.status !== 'IN_PROGRESS' && p.status !== 'SOLVED') && (p.moderationStatus === 'PENDING' || !p.isApproved)).length})
+                Pending Review ({problems.filter((p) => (!p.assignedLead && p.status !== 'IN_PROGRESS' && p.status !== 'SOLVED') && (p.status === 'PENDING_REVIEW' || p.moderationStatus === 'PENDING' || !p.isApproved || p.reflaggedByCommunity)).length})
               </button>
               <button
                 onClick={() => setModerationFilter('ALL')}
@@ -1007,6 +1016,19 @@ export const AdminScreen: React.FC = () => {
                 }`}
               >
                 Urgent ({problems.filter((p) => (!p.assignedLead && p.status !== 'IN_PROGRESS' && p.status !== 'SOLVED') && p.urgent).length})
+              </button>
+              <button
+                onClick={() => setModerationFilter('AI_FLAGGED')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-['Epilogue'] font-bold border cursor-pointer shrink-0 flex items-center gap-1 ${
+                  moderationFilter === 'AI_FLAGGED'
+                    ? 'bg-[#DC2626] text-white border-[#DC2626]'
+                    : 'bg-white text-[#DC2626] border-[#FECACA] hover:bg-[#FEF2F2]'
+                }`}
+              >
+                <span>⚠️ AI Mismatch</span>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-black/10">
+                  {problems.filter((p) => (!p.assignedLead && p.status !== 'IN_PROGRESS' && p.status !== 'SOLVED') && (p.aiPhotoFlagged || p.aiPhotoMatchResult === 'MISMATCH')).length}
+                </span>
               </button>
             </div>
           </div>
@@ -1039,9 +1061,45 @@ export const AdminScreen: React.FC = () => {
                             +{problem.linkedDuplicatesCount} Linked Reports
                           </span>
                         )}
-                        {problem.moderationStatus === 'PENDING' && (
+                        {(problem.status === 'PENDING_REVIEW' || problem.moderationStatus === 'PENDING' || !problem.isApproved) && (
                           <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#EBF3FF] text-[#1D4ED8] border border-[#BFDBFE]">
-                            Needs Review
+                            Pending Review
+                          </span>
+                        )}
+                        {(problem.reflaggedByCommunity || (problem.flagCount || 0) > 0) && (
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA]">
+                            🚩 Flagged ({problem.flagCount || 1})
+                          </span>
+                        )}
+                        {problem.possibleReusedPhoto && (
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FFFBEB] text-[#D97706] border border-[#FDE68A]" title="Perceptual hash match with a previously uploaded photo">
+                            ⚠️ Possible Reused Photo
+                          </span>
+                        )}
+                        {problem.aiPhotoFlagged && (
+                          <span
+                            className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA] flex items-center gap-1"
+                            title={problem.aiPhotoRawResponse ? `AI Vision check: ${problem.aiPhotoRawResponse}` : 'AI flagged: photo may not match category'}
+                          >
+                            <span>⚠️</span>
+                            <span>AI flagged: photo may not match category</span>
+                          </span>
+                        )}
+                        {!problem.aiPhotoFlagged && problem.aiPhotoMatchResult === 'MISMATCH' && (
+                          <span
+                            className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA] flex items-center gap-1"
+                            title={problem.aiPhotoRawResponse ? `AI Vision check: ${problem.aiPhotoRawResponse}` : 'AI: possible mismatch'}
+                          >
+                            <span>⚠️</span>
+                            <span>AI: possible mismatch</span>
+                          </span>
+                        )}
+                        {problem.aiPhotoMatchResult === 'UNCLEAR' && (
+                          <span
+                            className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-[#F3F4F6] text-[#4B5563] border border-[#E5E7EB]"
+                            title={problem.aiPhotoRawResponse ? `AI Vision check: ${problem.aiPhotoRawResponse}` : 'AI check was inconclusive'}
+                          >
+                            AI: unclear match
                           </span>
                         )}
                         <span className="text-[10px] font-mono text-[#7C695E]">
@@ -1054,6 +1112,16 @@ export const AdminScreen: React.FC = () => {
                       <p className="text-xs text-[#57423C] line-clamp-2">
                         {problem.description}
                       </p>
+                      {problem.photoUrl && (
+                        <div className="pt-1">
+                          <img
+                            src={problem.photoUrl}
+                            alt="Report evidence"
+                            className="w-20 h-14 object-cover rounded-md border border-[#DEC0B8]"
+                            loading="lazy"
+                          />
+                        </div>
+                      )}
                       <p className="text-[11px] text-[#7C695E]">
                         📍 {problem.location} {problem.landmark ? `• Near ${problem.landmark}` : ''} • Reported by {problem.anonymous ? 'Anonymous Neighbor' : (problem.reporterName || 'Neighbor')}
                       </p>
@@ -1061,12 +1129,12 @@ export const AdminScreen: React.FC = () => {
 
                     {/* Action buttons */}
                     <div className="flex items-center gap-1.5 self-start sm:self-auto flex-wrap">
-                      {problem.moderationStatus === 'PENDING' || !problem.isApproved ? (
+                      {(problem.status === 'PENDING_REVIEW' || problem.moderationStatus === 'PENDING' || !problem.isApproved || problem.reflaggedByCommunity) ? (
                         <>
                           <button
                             onClick={() => approveProblem(problem.id)}
                             className="px-2.5 py-1.5 text-xs font-['Epilogue'] font-bold rounded-lg bg-[#1B4B43] hover:bg-[#153a34] text-white cursor-pointer flex items-center gap-1 shadow-2xs"
-                            title="Approve report and keep in unassigned queue"
+                            title="Approve report and publish to public problem wall"
                           >
                             <Check className="w-3.5 h-3.5" />
                             <span>Approve</span>
@@ -1081,15 +1149,15 @@ export const AdminScreen: React.FC = () => {
                           </button>
                           <button
                             onClick={() => {
-                              if (window.confirm(`Reject and dismiss report "${problem.title}"?`)) {
-                                rejectProblem(problem.id, 'Dismissed during coordinator moderation review');
+                              if (window.confirm(`Remove and reject spam report "${problem.title}"? This permanently keeps it off the public wall.`)) {
+                                rejectProblem(problem.id, 'Marked as spam during coordinator review');
                               }
                             }}
-                            className="px-2.5 py-1.5 text-xs font-['Epilogue'] font-bold rounded-lg bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#DEC0B8] cursor-pointer flex items-center gap-1"
-                            title="Reject report"
+                            className="px-2.5 py-1.5 text-xs font-['Epilogue'] font-bold rounded-lg bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA] cursor-pointer flex items-center gap-1 shadow-2xs"
+                            title="Remove spam and permanently exclude from public wall"
                           >
-                            <X className="w-3.5 h-3.5" />
-                            <span>Reject</span>
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remove Spam</span>
                           </button>
                         </>
                       ) : (
